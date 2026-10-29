@@ -1,0 +1,57 @@
+# Export the W&B runs listed in runs.txt and publish site/ to GitHub Pages.
+# The data files are built here and only live in the published page, never in the repo.
+# If the export fails (W&B down, key expired, a run id that doesn't exist), the job stops and the last published
+# page stays up.
+name: Publish dashboard
+
+on:
+  schedule:
+    - cron: "17 * * * *" # hourly; GitHub delays jobs queued at the top of the hour
+  workflow_dispatch: # "Run workflow" button on the Actions tab
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Downloaded W&B tables never change (their file names include a content hash), so keeping them between runs
+      # makes a refresh fetch only the new cycles: about 4 minutes for crawl 239994 from scratch, seconds after that.
+      - uses: actions/cache@v6
+        with:
+          path: .wandb_cache
+          key: wandb-tables-${{ github.run_id }}
+          restore-keys: wandb-tables-
+
+      - run: python export.py
+        env:
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v5
