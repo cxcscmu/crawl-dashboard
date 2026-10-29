@@ -1,0 +1,6 @@
+.venv/
+.wandb_cache/
+__pycache__/
+.DS_Store
+# Built by export.py; the published page gets them from the GitHub Action
+site/data/

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crawl Metrics Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="wrap top">
+    <div class="title-row">
+      <h1>Crawl metrics</h1>
+      <button id="theme" class="tbtn" type="button">Dark mode</button>
+    </div>
+    <p id="run-name" class="run-name"></p>
+    <ul id="run-meta" class="meta"></ul>
+  </header>
+
+  <div class="filters">
+    <div class="wrap filter-row">
+      <label class="field"><span>Run</span><select id="f-run"></select></label>
+      <div class="field">
+        <span id="f-view-label">View</span>
+        <div class="seg" role="group" aria-labelledby="f-view-label">
+          <button type="button" data-view="per" aria-pressed="true">Per cycle</button><button type="button" data-view="cum" aria-pressed="false">Cumulative</button>
+        </div>
+      </div>
+      <label class="field"><span>Cycle</span><select id="f-cycle"></select></label>
+      <span class="hint">Charts run across all cycles; the cycle picker sets the tiles, top-domain lists and histogram.</span>
+    </div>
+  </div>
+
+  <main class="wrap">
+    <div id="error" class="error" role="alert" hidden></div>
+    <h2 id="kpi-title" class="kpi-title"></h2>
+    <section id="kpis" class="kpis" aria-labelledby="kpi-title"></section>
+    <p id="gaps" class="gaps" hidden></p>
+    <nav aria-label="Sections"><ul id="toc" class="toc"></ul></nav>
+    <div id="sections"></div>
+  </main>
+
+  <aside id="drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
+
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@3.7.0/plotly.min.js" integrity="sha384-l4G4qURPwALv583BKlynU/4LiUx0rk9jcTX58Aq+Jc+jgWb52zeH2geZkSS3UPPs" crossorigin="anonymous"></script>
+  <script src="data/runs.js"></script>
+  <script src="charts.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

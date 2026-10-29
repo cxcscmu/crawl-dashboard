@@ -1,0 +1,5 @@
+# The runs the published page shows, one W&B run id per line, in this order; the first one opens by default.
+# The page's run picker shows each run's W&B name, which ends in the crawl job number.
+crawl-233150      # FineWeb-Edu + fastText page score, cycles 1-9 (crawl 233150)
+crawl-237653      # Common Crawl-style baseline (crawl 239994; the W&B id kept the number of the crawl's first job)
+baseline-148132   # prod chain, cycles 1-9 (crawl 148132)
