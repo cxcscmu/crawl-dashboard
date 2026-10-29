@@ -40,6 +40,19 @@ TABLES = {
 }
 
 
+# The published page is public, so only the run settings it shows leave W&B (not, e.g., crawl_dir, a path on the cluster).
+PAGE_CONFIG = {"crawl_job"}
+PAGE_DRIVER_CONFIG = {"TOPN", "TOPN_RAMP", "TOPN_PER_DOMAIN", "TOPN_PER_HOST", "NODE_COUNT"}
+
+
+def page_config(config):
+    out = {k: config[k] for k in PAGE_CONFIG if k in config}
+    driver = config.get("driver")
+    if isinstance(driver, dict):
+        out["driver"] = {k: driver[k] for k in PAGE_DRIVER_CONFIG if k in driver}
+    return out
+
+
 def merge_by_cycle(rows):
     """Runs log each cycle in several passes (a main row, then backfills), so fold them into one record per cycle.
 
@@ -109,7 +122,7 @@ def export_run(api, project, run_id):
         "url": run.url,
         "created_at": run.created_at,
         "exported_at": exported_at,
-        "config": dict(run.config),
+        "config": page_config(dict(run.config)),
         "cycles": cycles,
         "metrics": metrics,
         "histograms": histograms,
