@@ -122,6 +122,8 @@ const SECTIONS = [
     id: "domains",
     title: "Domain diversity",
     blurb: "How many sites the crawl reaches and how concentrated it is. Click a domain in any list for its numbers across cycles.",
+    // The fetch-side domain numbers come from the WARC index, and pages replayed from the fetch cache get no WARC record.
+    cacheNote: "This crawl replays some pages from the fetch cache, and those have no WARC record, so the domain counts, hosts and fetched-page lists here only cover pages actually requested.",
     charts: [
       {
         type: "line", title: "Domains and hosts", sub: "Distinct domains and hosts with fetched pages", unit: "count",
@@ -141,9 +143,9 @@ const SECTIONS = [
         ],
       },
       {
-        // No line at TOPN_PER_DOMAIN: that caps the URLs a domain gets selected, while these counts include redirects
-        // and error responses, so domains legitimately pass it.
-        type: "bars", title: "Top domains by pages fetched", sub: "Fetch responses per domain, redirects and errors included",
+        // Counts HTTP 200 records in the WARC index. No line at TOPN_PER_DOMAIN: until 2026-10-22 the fetcher followed
+        // redirects to other domains inline, past the target domain's limit (fetcher.redirect.follow.other.domain).
+        type: "bars", title: "Top domains by pages fetched", sub: "Pages that returned HTTP 200, per domain",
         table: "domains/top_domains", tableCum: "domains/top_domains_cumulative",
         value: "pages", unit: "count", valueHead: "Pages fetched", extras: [{ col: "share %", head: "Share", unit: "pct" }], clickable: true,
       },
@@ -793,6 +795,7 @@ function renderSections() {
         { class: "sec", id: sec.id, "aria-labelledby": sec.id + "-h" },
         html("h2", { id: sec.id + "-h", text: `${tab.n + 1}. ${sec.title}` }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
+        sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && html("p", { class: "blurb", text: sec.cacheNote }),
         html("div", { class: "grid" }, ...sec.charts.map((spec) => renderCard(spec, new Set())))
       )
     );

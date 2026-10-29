@@ -59,7 +59,12 @@ The charts are drawn with [Plotly.js](https://plotly.com/javascript/) through th
 - English share of known-language pages: newer runs log `text/english_pct_of_language_known`. For runs that don't, the page computes it from the language table as English ÷ (all − unknown), which gives the same numbers on `crawl-237653`.
 - HTTP status classes are sums of the per-code shares (for example, 4xx = 403 + 404 + 410 + 429 + other 4xx).
 - Priorities logged as 0 in the seed cycle are left out of the priority chart.
-- The two top-domain tables count different things. `domains/top_domains` counts fetched pages per domain, while `text/top_domains_by_pages` counts English pages after parsing and scoring. They share only 15 to 22 of their 50 domains in a cycle, and the English count is sometimes the larger one. For example, `knowunity.com` has 2,164 English pages in cycle 9 but isn't in that cycle's fetch-level top 50.
+- The two top-domain tables come from different files.
+  - `domains/top_domains` counts HTTP 200 records in the cycle's WARC index (CDX).
+  - `text/top_domains_by_pages` counts pages in the segment's `parse_data` that the scorer rated as English.
+  - In crawl 233150 the two cycle totals agree to within 0.5%, but per domain they don't. Some domains have far more English pages than 200 records. For example, `igenea.com` has 2,060 English pages vs. 446 200 records in cycle 6, and `knowunity.com` has 2,164 English pages in cycle 9 with too few 200 records to make the top 50. So a few pages are assigned to one domain in the WARC and to another in the parse output. Both of those sites have country domains, which points at redirects, but this hasn't been confirmed.
+- Pages past the per-domain cap: until 2026-10-22 the fetcher followed redirects to other domains inline, skipping the target domain's per-cycle limit. This is why domains such as `hugedomains.com` pass 250 in crawl 233150.
+- In crawls that use the fetch cache (crawl 239994), replayed pages have no WARC record. So everything counted from the CDX (domains, hosts, fetched-page lists, HTTP status shares) covers only the pages actually requested, 63-78% of each cycle's pages in its first cycles.
 
 ## Not in W&B for crawl-233150
 
