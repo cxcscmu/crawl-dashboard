@@ -139,28 +139,31 @@ const SECTIONS = [
         ],
       },
       {
-        type: "bars", title: "Top domains by pages fetched", table: "domains/top_domains", tableCum: "domains/top_domains_cumulative",
-        value: "pages", unit: "count", valueHead: "Pages fetched", extras: [{ col: "share %", head: "Share", unit: "pct" }],
-        ref: { config: "TOPN_PER_DOMAIN", label: "per-domain cap" }, clickable: true,
+        // No line at TOPN_PER_DOMAIN: that caps the URLs a domain gets selected, while these counts include redirects
+        // and error responses, so domains legitimately pass it.
+        type: "bars", title: "Top domains by pages fetched", sub: "Fetch responses per domain, redirects and errors included",
+        table: "domains/top_domains", tableCum: "domains/top_domains_cumulative",
+        value: "pages", unit: "count", valueHead: "Pages fetched", extras: [{ col: "share %", head: "Share", unit: "pct" }], clickable: true,
       },
       {
         type: "bars", title: "Top domains by English pages, with quality", table: "text/top_domains_by_pages", tableCum: "text/top_domains_by_pages_cumulative",
         value: "English scored pages", unit: "count", valueHead: "English pages",
         extras: [{ col: "FineWeb-Edu mean", head: "Edu", unit: "score" }, { col: "fastText quality mean", head: "fastText", unit: "score" }],
-        clickable: true,
+        emptyWhy: "It counts the English pages the crawler scored, and this crawl doesn't score pages.", clickable: true,
       },
       { type: "bars", title: "Top newly discovered domains", table: "domains/top_new_domains", value: "pages", unit: "count", valueHead: "Pages fetched", clickable: true },
       {
         type: "bars", title: "Domains with the highest FineWeb-Edu", table: "text/top_domains_by_fineweb_edu",
         value: "FineWeb-Edu mean", unit: "score", valueHead: "FineWeb-Edu mean", max: 1,
         extras: [{ col: "English scored pages", head: "Pages", unit: "count" }, { col: "fastText quality mean", head: "fastText", unit: "score" }],
-        clickable: true,
+        emptyWhy: "It ranks the domains of the pages the crawler scored, and this crawl doesn't score pages.", clickable: true,
       },
     ],
   },
   {
     id: "priority",
     title: "Prioritization quality",
+    tab: "Prioritization",
     blurb: "Does the crawler pick good pages? Cycle 1 fetches the seed list, so it has no priorities. No random-priority baseline is logged yet, so there is nothing to compare these numbers against.",
     charts: [
       {
@@ -183,10 +186,11 @@ const SECTIONS = [
         foot: "Priorities logged as 0 (the seed cycle) are left out.",
       },
       {
+        // The prod baseline was logged by a different script (monitoring/dash.py), which kept its stats file's names.
         type: "line", title: "Outlinks found", unit: "count",
         series: [
-          { label: "Outlinks", key: "frontier/outlinks" },
-          { label: "Distinct outlinks", key: "frontier/outlinks_distinct" },
+          { label: "Outlinks", key: ["frontier/outlinks", "frontier/outlinks_total"] },
+          { label: "Distinct outlinks", key: ["frontier/outlinks_distinct", "frontier/distinct_urls"] },
           { label: "Outlink votes", key: "frontier/outlink_votes" },
         ],
       },
@@ -341,6 +345,7 @@ const SECTIONS = [
   {
     id: "downstream",
     title: "Downstream results",
+    tab: "Downstream",
     blurb: "The final measure of crawl quality.",
     charts: [
       {
@@ -356,7 +361,7 @@ const SECTIONS = [
 // ---- State and data access ------------------------------------------------------------------------------------------
 
 const RUNS = window.CRAWL_RUNS || [];
-const state = { run: null, view: "per", cycle: null };
+const state = { run: null, view: "per", cycle: null, tab: SECTIONS[0].id };
 let DATA = null;
 let LATEST = null; // the newest cycle with full metrics; see latestCompleteCycle
 let DOMAINS = new Map();
@@ -364,7 +369,8 @@ let allQuery = "";
 let closeDrawer = null;
 
 const has = (v) => Array.isArray(v) && v.some((x) => x != null);
-const metric = (key) => (key && DATA.metrics[key]) || null;
+// A key can be a list of names for the same metric, when runs logged it under different names; the first one wins.
+const metric = (key) => (Array.isArray(key) ? key.map(metric).find(Boolean) : key && DATA.metrics[key]) || null;
 const cycleIndex = () => DATA.cycles.indexOf(state.cycle);
 const cell = (v, fmt) => (v == null || v === "" ? "—" : fmt(v));
 const tableFmt = (unit) => (unit === "count" ? F.int : F[unit]);
@@ -396,7 +402,7 @@ function chartView(spec) {
 }
 
 function specKeys(spec) {
-  return (spec.series || []).flatMap((s) => [s.key, s.per, ...(s.sum || [])].filter(Boolean));
+  return (spec.series || []).flatMap((s) => [s.key, s.per, ...(s.sum || [])].flat().filter(Boolean));
 }
 
 // Matches how newer runs compute text/english_pct_of_language_known: English share of pages whose language isn't "unknown".
@@ -554,6 +560,11 @@ function buildBars(spec) {
   if (!DATA.tables[key]) return { empty: "Not logged in this run.", keys: [spec.table], gap: true };
   const t = DATA.tables[key][state.cycle];
   if (!t) return { empty: `Not logged for cycle ${state.cycle}.`, keys: [spec.table] };
+  if (!t.data.length) {
+    const never = Object.values(DATA.tables[key]).every((x) => !x.data.length);
+    if (!never) return { empty: `Logged, but empty for cycle ${state.cycle}.` };
+    return { empty: ["Logged every cycle, but always empty in this run.", spec.emptyWhy].filter(Boolean).join(" "), gap: true };
+  }
   const col = (name) => t.columns.indexOf(name);
   const li = col(spec.label || "domain");
   const vi = col(spec.value);
@@ -569,11 +580,6 @@ function buildBars(spec) {
     muted: (spec.muted || []).includes(r[li]),
     extras: extras.map((e) => cell(extraValue(r, e), F[e.unit])),
   }));
-  let ref = null;
-  if (spec.ref && !useCum) {
-    const v = parseFloat(((DATA.config || {}).driver || {})[spec.ref.config]);
-    if (v > 0) ref = { value: v, label: `${spec.ref.label}: ${spec.ref.config} = ${F.count(v)}` };
-  }
   const limit = spec.limit || 12;
   const fmt = F[spec.unit];
   const scope = useCum ? `Cycles ${DATA.cycles[0]}–${state.cycle}` : `Cycle ${state.cycle}`;
@@ -583,7 +589,7 @@ function buildBars(spec) {
     html: true,
     draw: (host) =>
       Charts.bars(host, {
-        rows: rows.slice(0, limit), fmt, max: spec.max, ref,
+        rows: rows.slice(0, limit), fmt, max: spec.max,
         labelHead: spec.labelHead || "Domain", valueHead: spec.valueHead, extras: extras.map((e) => e.head),
         onSelect: spec.clickable ? safely(openDomain) : null,
       }),
@@ -747,33 +753,106 @@ function renderKpis() {
   }
 }
 
+const button = (attrs, onClick) => {
+  const b = html("button", { type: "button", ...attrs });
+  b.addEventListener("click", safely(onClick));
+  return b;
+};
+
+// One tab per section, plus every logged metric; the page shows one tab at a time.
+const TABS = [...SECTIONS.map((sec, n) => ({ id: sec.id, label: sec.tab || sec.title, sec, n })), { id: "all", label: "All metrics" }];
+
+// Which charts a run can't fill and whether a section has anything to show, without drawing the other tabs.
+function sectionStatus() {
+  const gaps = new Map(); // gap name -> section id
+  const hasData = new Set();
+  for (const sec of SECTIONS) {
+    for (const spec of sec.charts) {
+      const built = BUILDERS[spec.type](spec);
+      if (built.gap) gaps.set(spec.gap || spec.title, sec.id);
+      if (!built.empty && !built.note) hasData.add(sec.id);
+    }
+  }
+  return { gaps, hasData };
+}
+
 function renderSections() {
+  const { gaps, hasData } = sectionStatus();
   const main = document.getElementById("sections");
   main.textContent = "";
-  const gaps = new Set();
-  SECTIONS.forEach((sec, n) => {
-    const grid = html("div", { class: "grid" }, ...sec.charts.map((spec) => renderCard(spec, gaps)));
+  main.setAttribute("aria-labelledby", "tab-" + state.tab);
+  const i = TABS.findIndex((t) => t.id === state.tab);
+  const tab = TABS[i];
+  if (tab.sec) {
+    const sec = tab.sec;
     main.append(
       html(
         "section",
         { class: "sec", id: sec.id, "aria-labelledby": sec.id + "-h" },
-        html("h2", { id: sec.id + "-h", text: `${n + 1}. ${sec.title}` }),
+        html("h2", { id: sec.id + "-h", text: `${tab.n + 1}. ${sec.title}` }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
-        grid
+        html("div", { class: "grid" }, ...sec.charts.map((spec) => renderCard(spec, new Set())))
       )
     );
-  });
-  main.append(renderAllMetrics());
+  } else {
+    main.append(renderAllMetrics());
+  }
+  // Previous / next, so a reader can go through the sections in order without going back up to the tabs.
+  const step = (t, text) => t && button({ class: "tbtn step", text }, () => selectTab(t.id));
+  const prev = TABS[i - 1];
+  const next = TABS[i + 1];
+  main.append(html("div", { class: "pager" }, step(prev, prev && `← ${prev.label}`) || html("span"), step(next, next && `${next.label} →`)));
 
+  renderGaps(gaps);
+  renderTabs(hasData);
+}
+
+// What this run doesn't log, grouped by section; each section name opens its tab. Long lists start collapsed.
+let gapsOpen = null; // the reader's own choice, once they've opened or closed the list
+function renderGaps(gaps) {
   const note = document.getElementById("gaps");
   note.textContent = "";
   note.hidden = !gaps.size;
-  note.append(html("strong", { text: "Not logged in this run: " }), [...gaps].join(" · "), ". Their cards below list the W&B keys they expect.");
+  if (!gaps.size) return;
+  const bySection = new Map();
+  for (const [name, id] of gaps) bySection.set(id, [...(bySection.get(id) || []), name]);
+  const summary = html("summary", {}, html("strong", { text: "Not logged in this run: " }), `${gaps.size} chart${gaps.size > 1 ? "s" : ""} in ${bySection.size} section${bySection.size > 1 ? "s" : ""}`);
+  summary.addEventListener("click", () => (gapsOpen = !note.open));
+  const list = html("ul", {});
+  for (const [id, names] of bySection) {
+    const tab = TABS.find((t) => t.id === id);
+    list.append(html("li", {}, button({ class: "linkish", text: `${tab.n + 1}. ${tab.sec.title}` }, () => selectTab(id)), ": " + names.join(" · ")));
+  }
+  note.append(summary, list, html("p", { text: "Their cards list the W&B keys they expect." }));
+  note.open = gapsOpen ?? gaps.size <= 8;
+}
 
-  const toc = document.getElementById("toc");
-  toc.textContent = "";
-  SECTIONS.forEach((sec, n) => toc.append(html("li", {}, html("a", { href: "#" + sec.id, text: `${n + 1}. ${sec.title}` }))));
-  toc.append(html("li", {}, html("a", { href: "#all", text: "Everything logged" })));
+function renderTabs(hasData) {
+  const bar = document.getElementById("tabs");
+  bar.textContent = "";
+  for (const t of TABS) {
+    const selected = t.id === state.tab;
+    const empty = t.sec && !hasData.has(t.id);
+    const attrs = {
+      role: "tab", id: "tab-" + t.id, class: "tab" + (empty ? " nodata" : ""), "aria-selected": String(selected), "aria-controls": "sections",
+      tabindex: selected ? "0" : "-1", title: empty ? "Nothing logged for this section in this run" : null, text: t.label,
+    };
+    bar.append(button(attrs, () => selectTab(t.id)));
+  }
+  const current = document.getElementById("tab-" + state.tab);
+  // Keep the selected tab in view when the tab row scrolls sideways (narrow screens).
+  if (current) bar.scrollLeft = Math.max(0, current.offsetLeft - bar.clientWidth / 2 + current.offsetWidth / 2);
+}
+
+function selectTab(id, focus) {
+  if (!TABS.some((t) => t.id === id)) return;
+  state.tab = id;
+  render();
+  if (focus) document.getElementById("tab-" + id).focus();
+  // If the reader had scrolled down into the previous tab, bring the top of the new one into view under the sticky bar.
+  const top = document.getElementById("sections").getBoundingClientRect().top;
+  const bar = document.querySelector(".filters").offsetHeight;
+  if (top < bar) window.scrollTo(0, window.scrollY + top - bar - 12);
 }
 
 function renderAllMetrics() {
@@ -907,8 +986,9 @@ function syncUrl() {
   p.set("run", state.run);
   if (state.view === "cum") p.set("view", "cum");
   if (state.cycle !== LATEST) p.set("cycle", state.cycle);
+  if (state.tab !== TABS[0].id) p.set("tab", state.tab);
   try {
-    history.replaceState(null, "", "?" + p + location.hash);
+    history.replaceState(null, "", "?" + p);
   } catch {
     // Some browsers refuse URL updates for pages opened from disk; the page works the same without it.
   }
@@ -1007,6 +1087,17 @@ function main() {
   state.run = RUNS.some((r) => r.id === p.get("run")) ? p.get("run") : RUNS[0].id;
   state.view = p.get("view") === "cum" ? "cum" : "per";
   state.cycle = parseInt(p.get("cycle"), 10);
+  const wanted = p.get("tab") || location.hash.slice(1); // links from before the tabs pointed at #<section>
+  if (TABS.some((t) => t.id === wanted)) state.tab = wanted;
+
+  // Arrow keys, Home and End move between tabs, as in any tab list.
+  document.getElementById("tabs").addEventListener("keydown", (e) => {
+    const i = TABS.findIndex((t) => t.id === state.tab);
+    const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
+    if (to == null || !TABS[to]) return;
+    e.preventDefault();
+    selectTab(TABS[to].id, true);
+  });
 
   document.getElementById("f-run").addEventListener("change", (e) => {
     state.run = e.target.value;

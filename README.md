@@ -31,7 +31,9 @@ The data files aren't in the repo, so export at least one run first. Then open `
 
 In each chart, hovering lists every series at that cycle. Click a legend entry to hide that series, or double-click it to show only that series. The menu in a chart's top-right corner has zoom, pan, reset and PNG download.
 
-The URL keeps the current view (`index.html?run=crawl-233150&view=cum&cycle=7`), so a copied link reopens the same view.
+The sections are tabs in the bar at the top. Arrow keys move between them, and the buttons at the bottom of each section go to the previous or next one. Sections a run has no data for are greyed out.
+
+The URL keeps the current view (`index.html?run=crawl-233150&view=cum&cycle=7&tab=domains`), so a copied link reopens the same view.
 
 ## Publishing
 

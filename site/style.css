@@ -157,21 +157,36 @@ body.loading main { opacity: 0.5; transition: opacity 0.15s; }
 
 .gaps { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink-2); font-size: 13px; }
 .gaps strong { color: var(--ink); font-weight: 600; }
-.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; padding: 0; list-style: none; }
-.toc a {
-  display: inline-block;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
+.gaps summary { cursor: pointer; }
+.gaps ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.gaps li { margin: 3px 0; }
+.gaps p { margin: 8px 0 0; color: var(--muted); }
+.linkish { padding: 0; border: 0; background: none; color: var(--ink-2); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.linkish:hover { color: var(--ink); }
+
+/* ---- Section tabs (in the sticky bar) ---- */
+.tabs-row { padding-bottom: 8px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; }
+@media (max-width: 640px) { .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; } } /* one sideways-scrolling row on phones */
+.tab {
+  flex: none;
+  padding: 5px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
   color: var(--ink-2);
-  font-size: 12.5px;
-  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.toc a:hover { background: var(--hover); color: var(--ink); }
+.tab:hover { background: var(--hover); color: var(--ink); }
+.tab.nodata { color: var(--muted); }
+.tab[aria-selected="true"] { border-color: var(--border); background: var(--surface); color: var(--ink); font-weight: 600; }
+.pager { display: flex; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.pager .step { padding: 6px 12px; font-size: 13px; }
 
 /* ---- Sections and cards ---- */
-.sec { margin-top: 36px; scroll-margin-top: 70px; }
+.sec { margin-top: 24px; }
 .sec > h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; }
 .blurb { max-width: 85ch; margin: 0 0 12px; color: var(--ink-2); }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 470px), 1fr)); gap: 14px; }

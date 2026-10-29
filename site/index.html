@@ -28,15 +28,15 @@
       <label class="field"><span>Cycle</span><select id="f-cycle"></select></label>
       <span class="hint">Charts run across all cycles; the cycle picker sets the tiles, top-domain lists and histogram.</span>
     </div>
+    <nav class="wrap tabs-row" aria-label="Sections"><div id="tabs" class="tabs" role="tablist"></div></nav>
   </div>
 
   <main class="wrap">
     <div id="error" class="error" role="alert" hidden></div>
     <h2 id="kpi-title" class="kpi-title"></h2>
     <section id="kpis" class="kpis" aria-labelledby="kpi-title"></section>
-    <p id="gaps" class="gaps" hidden></p>
-    <nav aria-label="Sections"><ul id="toc" class="toc"></ul></nav>
-    <div id="sections"></div>
+    <details id="gaps" class="gaps" hidden></details>
+    <div id="sections" role="tabpanel"></div>
   </main>
 
   <aside id="drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
