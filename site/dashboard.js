@@ -14,7 +14,9 @@ const { html, formats: F } = Charts;
 // Chart types: line, stack (stacked columns), hist, bars (top-N lists from a per-cycle table), note.
 
 const KPIS = [
-  { label: "Pages fetched, total", key: "fetch/pages_cumulative", unit: "count", addedKey: "fetch/pages", added: "this cycle" },
+  // wall/ and fetch/ hold the same running total; wall/ is the one every run has (the prod baseline has no fetch/
+  // total, and crawl 239994's fetch/ total repeats cycle 1 at cycle 2).
+  { label: "Pages fetched, total", key: ["wall/pages_cumulative", "fetch/pages_cumulative"], unit: "count", addedKey: "fetch/pages", added: "this cycle" },
   { label: "fastText quality, mean", key: "text/fasttext_quality_score_mean_per_cycle", unit: "score", good: "up" },
   { label: "Pages ≥ DCLM threshold", key: "text/fasttext_quality_score_ge_0p018112_pct_per_cycle", unit: "pct", good: "up" },
   { label: "FineWeb-Edu, mean", key: "text/fineweb_edu_score_mean_per_cycle", unit: "score", good: "up" },
@@ -206,7 +208,7 @@ const SECTIONS = [
         type: "line", title: "Fetch attempts and pages fetched", unit: "count",
         series: [
           { label: "Attempts", per: "fetch/attempts", cum: "fetch/attempts_cumulative" },
-          { label: "Pages fetched", per: "fetch/pages", cum: "fetch/pages_cumulative" },
+          { label: "Pages fetched", per: "fetch/pages", cum: ["wall/pages_cumulative", "fetch/pages_cumulative"] },
         ],
       },
       {
