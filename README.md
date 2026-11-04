@@ -31,7 +31,7 @@ The data files aren't in the repo, so export at least one run first. Then open `
 
 In each chart, hovering lists every series at that cycle. Click a legend entry to hide that series, or double-click it to show only that series. The menu in a chart's top-right corner has zoom, pan, reset and PNG download.
 
-The sections are tabs in the bar at the top. Arrow keys move between them, and the buttons at the bottom of each section go to the previous or next one. Sections a run has no data for are greyed out.
+Sections are grouped in the left navigation on desktop and in the Section picker on mobile. Arrow keys, Home and End move between desktop sections; the buttons at the bottom go to the previous or next section. Expand Cycle summary for the eight KPI tiles, Run details for configuration, or About these metrics for definitions. Unavailable figures and the run-wide missing-data list stay collapsed until requested. Figure search reveals a matching figure even when its group is collapsed.
 
 The URL keeps the current view (`index.html?run=crawl-233150&view=cum&cycle=7&tab=domains`), so a copied link reopens the same view.
 
@@ -74,3 +74,13 @@ The charts are drawn with [Plotly.js](https://plotly.com/javascript/) through th
 - **Downstream results.** These are tokens after the English filter per cycle (from the 53B runs), and DCLM Core with its 5 category scores for the 1B-1x pretrain (the prod rows in the sheet).
 
 The page shows each of these as an empty card that lists the W&B keys it expects. A run that logs those keys fills the card in automatically.
+
+## Domain explorer and figure search
+
+**Find a figure** searches titles, descriptions and W&B metric keys across all sections. Select a result to open its section and focus the figure, including figures the current run has not logged.
+
+**Domain explorer** filters sites and ranks them highest or lowest by fetched pages, quality, HTTP errors, actual failed attempts, failure rate, budget, outgoing links or within-domain priority/score correlation. Click any site for its cycle history, selected-cycle diagnostics and example crawled URLs. These diagnostic views always show the selected cycle, even with Cumulative selected.
+
+The existing public snapshots supply domain quality and HTTP-error counts. Page examples, allocated budgets, attempt-based failure rates, links by source domain and per-domain correlations need additional W&B tables from the external crawler/logger. The UI explicitly shows unavailable data. See [the domain table contract](docs/domain-data.md) for exact keys, columns and definitions; the exporter is ready to include them when logged.
+
+Run the calculation/validation tests with `node --test tests/domain-metrics.test.cjs`. Browser checks use Playwright from an existing installation: start `python3 -m http.server -d site 8000`, then run `node tests/dashboard.browser.cjs` (set `PLAYWRIGHT_MODULE` to its module path if necessary). Browser fixtures are illustrative and are intercepted in the test only, never written to public data files.

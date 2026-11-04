@@ -7,43 +7,64 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <a class="skip-link" href="#sections">Skip to content</a>
   <header class="wrap top">
     <div class="title-row">
       <h1>Crawl metrics</h1>
+      <section class="figure-finder" aria-label="Find a figure">
+        <label class="sr-only" for="figure-search">Find a figure</label>
+        <input id="figure-search" type="search" placeholder="Find a figure…" aria-controls="figure-results" autocomplete="off">
+        <span id="figure-count" class="sr-only" role="status"></span>
+        <div id="figure-results" hidden></div>
+      </section>
+      <details class="run-details">
+        <summary>Run details</summary>
+        <div class="run-details-content">
+          <p id="run-name" class="run-name"></p>
+          <ul id="run-meta" class="meta"></ul>
+          <p class="foot">Charts span all cycles. The cycle picker sets summaries, domain lists and histograms.</p>
+        </div>
+      </details>
       <button id="theme" class="tbtn" type="button">Dark mode</button>
     </div>
-    <p id="run-name" class="run-name"></p>
-    <ul id="run-meta" class="meta"></ul>
   </header>
 
   <div class="filters">
     <div class="wrap filter-row">
-      <label class="field"><span>Run</span><select id="f-run"></select></label>
+      <label class="field run-field"><span>Run</span><select id="f-run"></select></label>
+      <label class="field"><span>Cycle</span><select id="f-cycle"></select></label>
       <div class="field">
-        <span id="f-view-label">View</span>
+        <span id="f-view-label" class="sr-only">View</span>
         <div class="seg" role="group" aria-labelledby="f-view-label">
           <button type="button" data-view="per" aria-pressed="true">Per cycle</button><button type="button" data-view="cum" aria-pressed="false">Cumulative</button>
         </div>
       </div>
-      <label class="field"><span>Cycle</span><select id="f-cycle"></select></label>
-      <span class="hint">Charts run across all cycles; the cycle picker sets the tiles, top-domain lists and histogram.</span>
+
     </div>
-    <nav class="wrap tabs-row" aria-label="Sections"><div id="tabs" class="tabs" role="tablist"></div></nav>
   </div>
 
-  <main class="wrap">
-    <div id="error" class="error" role="alert" hidden></div>
-    <h2 id="kpi-title" class="kpi-title"></h2>
-    <section id="kpis" class="kpis" aria-labelledby="kpi-title"></section>
-    <details id="gaps" class="gaps" hidden></details>
-    <div id="sections" role="tabpanel"></div>
-  </main>
+  <div class="wrap workspace">
+    <nav class="section-nav" aria-label="Sections">
+      <label class="mobile-section field" for="f-section"><span>Section</span><select id="f-section"></select></label>
+      <div id="tabs" class="tabs" role="tablist" aria-label="Dashboard sections" aria-orientation="vertical"></div>
+    </nav>
+    <main>
+      <div id="error" class="error" role="alert" hidden></div>
+      <details id="cycle-summary" class="cycle-summary">
+        <summary id="kpi-title" class="kpi-title">Cycle summary</summary>
+        <section id="kpis" class="kpis" aria-labelledby="kpi-title"></section>
+      </details>
+      <div id="sections" role="tabpanel" tabindex="-1"></div>
+      <details id="gaps" class="gaps" hidden></details>
+    </main>
+  </div>
 
   <aside id="drawer" class="drawer" aria-labelledby="drawer-title" hidden></aside>
 
   <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@3.7.0/plotly.min.js" integrity="sha384-l4G4qURPwALv583BKlynU/4LiUx0rk9jcTX58Aq+Jc+jgWb52zeH2geZkSS3UPPs" crossorigin="anonymous"></script>
   <script src="data/runs.js"></script>
   <script src="charts.js"></script>
+  <script src="domain-metrics.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

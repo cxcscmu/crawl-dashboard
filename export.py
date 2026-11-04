@@ -37,6 +37,11 @@ TABLES = {
     "text/languages",
     "text/languages_cumulative",
     "fetch/top_failing_domains",
+    # Optional, explicitly logged diagnostics. See docs/domain-data.md for the public schema.
+    "domains/diagnostics",
+    "domains/page_examples",
+    "frontier/links_by_domain",
+    "frontier/priority_score_by_domain",
 }
 
 

@@ -119,6 +119,12 @@ const SECTIONS = [
     ],
   },
   {
+    id: "explorer",
+    title: "Domain explorer",
+    blurb: "Inspect individual sites, investigate download failures, and compare link contributions and priority accuracy.",
+    charts: [],
+  },
+  {
     id: "domains",
     title: "Domain diversity",
     blurb: "How many sites the crawl reaches and how concentrated it is. Click a domain in any list for its numbers across cycles.",
@@ -406,7 +412,8 @@ function chartView(spec) {
 }
 
 function specKeys(spec) {
-  return (spec.series || []).flatMap((s) => [s.key, s.per, ...(s.sum || [])].flat().filter(Boolean));
+  return [spec.table, spec.tableCum, spec.per, spec.cum,
+    ...(spec.series || []).flatMap((s) => [s.key, s.per, s.cum, ...(s.sum || []), ...(s.sumCum || [])].flat())].filter(Boolean);
 }
 
 // Matches how newer runs compute text/english_pct_of_language_known: English share of pages whose language isn't "unknown".
@@ -453,6 +460,13 @@ function buildDomainIndex(d) {
     });
   }
   visit("fetch/top_failing_domains", (r, get) => (r.errors = get("4xx/5xx responses")));
+  for (const cycle of d.cycles) {
+    for (const r of DomainMetrics.domains(d, cycle)) {
+      if (!index.has(r.domain)) index.set(r.domain, new Map());
+      const byCycle = index.get(r.domain);
+      byCycle.set(cycle, { ...byCycle.get(cycle), ...r });
+    }
+  }
   return index;
 }
 
@@ -732,7 +746,7 @@ function renderFilters() {
 function renderKpis() {
   const i = cycleIndex();
   document.getElementById("kpi-title").textContent =
-    `Cycle ${state.cycle} at a glance` + (state.cycle === LATEST ? "" : ` (latest complete cycle is ${LATEST})`);
+    `Cycle ${state.cycle} summary` + (state.cycle === LATEST ? "" : ` · latest complete: ${LATEST}`);
   const box = document.getElementById("kpis");
   box.textContent = "";
   for (const k of KPIS) {
@@ -753,7 +767,7 @@ function renderKpis() {
     }
     const sparkHost = html("div", { class: "spark-host" });
     box.append(html("div", { class: "tile" }, html("div", { class: "label", text: k.label }), html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost));
-    Charts.spark(sparkHost, values, i);
+    schedule(sparkHost, (host) => Charts.spark(host, values, i), resizer);
   }
 }
 
@@ -777,6 +791,7 @@ function sectionStatus() {
       if (!built.empty && !built.note) hasData.add(sec.id);
     }
   }
+  if (DomainMetrics.domains(DATA, state.cycle).length) hasData.add("explorer");
   return { gaps, hasData };
 }
 
@@ -793,10 +808,10 @@ function renderSections() {
       html(
         "section",
         { class: "sec", id: sec.id, "aria-labelledby": sec.id + "-h" },
-        html("h2", { id: sec.id + "-h", text: `${tab.n + 1}. ${sec.title}` }),
+        html("h2", { id: sec.id + "-h", text: sec.title }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
         sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && html("p", { class: "blurb", text: sec.cacheNote }),
-        html("div", { class: "grid" }, ...sec.charts.map((spec) => renderCard(spec, new Set())))
+        sec.id === "explorer" ? renderExplorer() : renderSectionFigures(sec)
       )
     );
   } else {
@@ -812,7 +827,27 @@ function renderSections() {
   renderTabs(hasData);
 }
 
-// What this run doesn't log, grouped by section; each section name opens its tab. Long lists start collapsed.
+// Keep unlogged figures accessible without letting placeholders dominate the section.
+function renderSectionFigures(sec) {
+  const available = [];
+  const missing = [];
+  sec.charts.forEach((spec, i) => {
+    const built = BUILDERS[spec.type](spec);
+    const card = renderCard(spec, new Set());
+    card.id = `figure-${sec.id}-${i}`;
+    card.tabIndex = -1;
+    (built.empty ? missing : available).push(card);
+  });
+  const content = html("div", {}, html("div", { class: "grid" }, ...available));
+  if (missing.length) {
+    content.append(html("details", { class: "unavailable", open: !available.length },
+      html("summary", { text: `${missing.length} unavailable figure${missing.length === 1 ? "" : "s"}` }),
+      html("div", { class: "grid" }, ...missing)));
+  }
+  return content;
+}
+
+// What this run doesn't log, grouped by section; expand only on request.
 let gapsOpen = null; // the reader's own choice, once they've opened or closed the list
 function renderGaps(gaps) {
   const note = document.getElementById("gaps");
@@ -826,31 +861,45 @@ function renderGaps(gaps) {
   const list = html("ul", {});
   for (const [id, names] of bySection) {
     const tab = TABS.find((t) => t.id === id);
-    list.append(html("li", {}, button({ class: "linkish", text: `${tab.n + 1}. ${tab.sec.title}` }, () => selectTab(id)), ": " + names.join(" · ")));
+    list.append(html("li", {}, button({ class: "linkish", text: tab.sec.title }, () => selectTab(id)), ": " + names.join(" · ")));
   }
   note.append(summary, list, html("p", { text: "Their cards list the W&B keys they expect." }));
-  note.open = gapsOpen ?? gaps.size <= 8;
+  note.open = gapsOpen ?? false;
 }
+
+const NAV_GROUPS = [
+  { label: "Content", ids: ["quality", "language", "usability"] },
+  { label: "Domains", ids: ["explorer", "domains", "priority"] },
+  { label: "Crawl operations", ids: ["fetch", "cache", "speed", "storage"] },
+  { label: "Reference", ids: ["downstream", "all"] },
+];
 
 function renderTabs(hasData) {
   const bar = document.getElementById("tabs");
+  const picker = document.getElementById("f-section");
   bar.textContent = "";
-  for (const t of TABS) {
-    const selected = t.id === state.tab;
-    const empty = t.sec && !hasData.has(t.id);
-    const attrs = {
-      role: "tab", id: "tab-" + t.id, class: "tab" + (empty ? " nodata" : ""), "aria-selected": String(selected), "aria-controls": "sections",
-      tabindex: selected ? "0" : "-1", title: empty ? "Nothing logged for this section in this run" : null, text: t.label,
-    };
-    bar.append(button(attrs, () => selectTab(t.id)));
+  picker.textContent = "";
+  for (const group of NAV_GROUPS) {
+    const items = TABS.filter((t) => group.ids.includes(t.id));
+    const navGroup = html("div", { class: "nav-group", role: "presentation" }, html("p", { class: "nav-label", "aria-hidden": "true", text: group.label }));
+    const options = html("optgroup", { label: group.label });
+    for (const t of items) {
+      const selected = t.id === state.tab;
+      const empty = t.sec && !hasData.has(t.id);
+      navGroup.append(button({
+        role: "tab", id: "tab-" + t.id, class: "tab" + (empty ? " nodata" : ""), "aria-selected": String(selected), "aria-controls": "sections",
+        tabindex: selected ? "0" : "-1", title: empty ? "Nothing logged for this section in this run" : null, text: t.label,
+      }, () => selectTab(t.id)));
+      options.append(html("option", { value: t.id, selected, text: t.label }));
+    }
+    bar.append(navGroup);
+    picker.append(options);
   }
-  const current = document.getElementById("tab-" + state.tab);
-  // Keep the selected tab in view when the tab row scrolls sideways (narrow screens).
-  if (current) bar.scrollLeft = Math.max(0, current.offsetLeft - bar.clientWidth / 2 + current.offsetWidth / 2);
 }
 
 function selectTab(id, focus) {
   if (!TABS.some((t) => t.id === id)) return;
+  if (closeDrawer) closeDrawer(false);
   state.tab = id;
   render();
   if (focus) document.getElementById("tab-" + id).focus();
@@ -906,21 +955,21 @@ function openDomain(domain, opener) {
   }
 
   const listed = DATA.cycles.filter((c) => rec.has(c));
-  const lines = [`Appears in this run's top-50 domain tables in ${listed.length} of ${DATA.cycles.length} cycles.`];
+  const lines = [`Appears in this run's exported domain tables in ${listed.length} of ${DATA.cycles.length} cycles.`];
   const scored = listed.filter((c) => rec.get(c).edu != null && rec.get(c).en);
   const crawlMean = metric("text/fineweb_edu_score_mean_per_cycle");
   const crawlFt = metric("text/fasttext_quality_score_mean_per_cycle");
   const crawlEn = metric("text/english_scored_pages");
   if (scored.length) {
-    const own = (f) => scored.reduce((t, c) => t + rec.get(c)[f] * rec.get(c).en, 0) / scored.reduce((t, c) => t + rec.get(c).en, 0);
-    const crawl = (m) => {
-      const idx = scored.map((c) => DATA.cycles.indexOf(c));
-      return idx.reduce((t, i) => t + m[i] * crawlEn[i], 0) / idx.reduce((t, i) => t + crawlEn[i], 0);
-    };
-    let line = `FineWeb-Edu mean on its English pages: ${F.score(own("edu"))}`;
-    if (crawlMean && crawlEn) line += ` (whole crawl, same cycles: ${F.score(crawl(crawlMean))})`;
-    line += `. fastText mean: ${F.score(own("ft"))}`;
-    if (crawlFt && crawlEn) line += ` (whole crawl: ${F.score(crawl(crawlFt))})`;
+    const own = (f) => DomainMetrics.weightedMean(scored.map((c) => rec.get(c)), f, "en");
+    const crawl = (m) => DomainMetrics.weightedMean(scored.map((c) => {
+      const i = DATA.cycles.indexOf(c);
+      return { value: m?.[i], weight: crawlEn?.[i] };
+    }), "value", "weight");
+    let line = `FineWeb-Edu mean on its English pages: ${cell(own("edu"), F.score)}`;
+    if (crawl(crawlMean) != null) line += ` (whole crawl, same listed cycles: ${F.score(crawl(crawlMean))})`;
+    line += `. fastText mean: ${cell(own("ft"), F.score)}`;
+    if (crawl(crawlFt) != null) line += ` (whole crawl: ${F.score(crawl(crawlFt))})`;
     lines.push(line + ".");
   }
   const firstNew = listed.find((c) => rec.get(c).isNew);
@@ -928,7 +977,8 @@ function openDomain(domain, opener) {
   for (const t of lines) drawer.append(html("p", { text: t }));
 
   const tableBox = html("div");
-  drawer.append(tableBox);
+  const history = html("details", { class: "domain-history" }, html("summary", { text: "History across cycles" }), tableBox);
+  drawer.append(history);
   Charts.table(tableBox, {
     columns: ["Cycle", "Pages fetched", "English pages", "FineWeb-Edu", "fastText", "New", "4xx/5xx"],
     rows: DATA.cycles.map((c) => {
@@ -936,8 +986,9 @@ function openDomain(domain, opener) {
       return [String(c), cell(r.pages, F.int), cell(r.en, F.int), cell(r.edu, F.score), cell(r.ft, F.score), r.isNew ? "yes" : "—", cell(r.errors, F.int)];
     }),
   });
-  drawer.append(html("p", { class: "foot", text: "A dash means the domain wasn't in that cycle's top-50 table for that column, not that the value was zero." }));
+  history.append(html("p", { class: "foot", text: "A dash means no exported value for that cycle and column, not zero. Original domain lists contain only the top 50." }));
 
+  appendDomainDetails(drawer, domain);
   drawer.hidden = false;
   close.focus();
   const onKey = (e) => e.key === "Escape" && closeDrawer();
@@ -949,6 +1000,163 @@ function openDomain(domain, opener) {
   };
   close.addEventListener("click", () => closeDrawer());
   document.addEventListener("keydown", onKey);
+}
+
+// ---- Search and domain investigation -------------------------------------------------------------------------------
+const explorerState = { mode: "overview", query: "", sort: "pages", ascending: false };
+const EXPLORER_MODES = {
+  overview: { label: "Overview", fields: ["pages", "en", "edu", "ft"] },
+  failures: { label: "Download failures", fields: ["httpErrors", "failures", "failureRate", "attempts", "budget", "budgetUse"] },
+  links: { label: "Links by source", fields: ["outlinks", "distinctOutlinks"] },
+  correlation: { label: "Priority correlation", fields: ["spearman", "pearson", "pairs"] },
+};
+const DOMAIN_FIELDS = {
+  pages: ["Pages fetched", "count"], en: ["English pages", "count"], edu: ["FineWeb-Edu", "score"], ft: ["fastText", "score"],
+  httpErrors: ["HTTP 4xx/5xx", "count"], failures: ["Failed attempts", "count"], failureRate: ["Failure rate", "pct"],
+  attempts: ["Attempts", "count"], budget: ["Allocated budget", "count"], budgetUse: ["Budget attempted", "pct"],
+  outlinks: ["Outlinks", "count"], distinctOutlinks: ["Distinct outlinks", "count"],
+  spearman: ["Spearman ρ", "corr"], pearson: ["Pearson r", "corr"], pairs: ["Scored pairs", "count"],
+};
+function domainValue(record, key) {
+  const v = record?.[key];
+  if (["spearman", "pearson"].includes(key) && (!(record.pairs >= 3) || Math.abs(v) > 1)) return "—";
+  return cell(v, F[DOMAIN_FIELDS[key][1]]);
+}
+function renderExplorer() {
+  const box = html("div", { class: "domain-explorer" });
+  const modes = html("div", { class: "explorer-modes", role: "group", "aria-label": "Domain investigation" });
+  for (const [id, mode] of Object.entries(EXPLORER_MODES)) {
+    modes.append(button({ class: "tab", "data-mode": id, "aria-pressed": String(id === explorerState.mode), text: mode.label }, () => {
+      explorerState.mode = id;
+      explorerState.sort = mode.fields[0];
+      explorerState.ascending = false;
+      renderSections();
+      document.querySelector(`[data-mode="${id}"]`).focus({ preventScroll: true });
+    }));
+  }
+  const mode = EXPLORER_MODES[explorerState.mode];
+  const records = DomainMetrics.domains(DATA, state.cycle);
+  // Legacy runs may have scored-domain tables without any fetched-domain table.
+  if (explorerState.mode === "overview" && !DomainMetrics.rank(records, explorerState.sort).length) {
+    explorerState.sort = mode.fields.find((key) => DomainMetrics.rank(records, key).length) || mode.fields[0];
+  }
+  const context = html("p", { class: "blurb", text: `Cycle ${state.cycle} · Per-cycle records · Select a domain for details` });
+  const search = html("input", { type: "search", class: "search", placeholder: "Filter domains…", "aria-label": "Filter domains", value: explorerState.query });
+  const sort = html("select", { "aria-label": "Rank domains by" });
+  for (const key of mode.fields) sort.append(html("option", { value: key, selected: key === explorerState.sort, text: DOMAIN_FIELDS[key][0] }));
+  const order = button({ class: "tbtn", text: explorerState.ascending ? "Lowest first" : "Highest first" }, () => {
+    explorerState.ascending = !explorerState.ascending;
+    order.textContent = explorerState.ascending ? "Lowest first" : "Highest first";
+    update();
+  });
+  const status = html("span", { class: "count", role: "status" });
+  const output = html("div");
+  const explanations = {
+    overview: "Fetched counts come from the WARC index; English-page quality comes from parsed/scored output. These populations can differ. Missing top-50 entries are unknown, not zero.",
+    failures: "HTTP errors cover recorded 4xx/5xx responses only. Failed attempts also include other download failures when logged. Failure rate = failed attempts ÷ attempts; budget attempted = attempts ÷ allocated budget. No per-domain budget is inferred from the run-wide cap.",
+    links: "Outlinks are links extracted from pages on the source domain, not inbound links to that domain. Counts alone do not measure content quality; distinct outlinks indicate breadth.",
+    correlation: "Priority versus fetched-page score within each domain. Signed correlations range from −1 to +1; lowest means most negative. Rankings require at least 3 scored pairs. They are descriptive, not a significance test; pair counts matter.",
+  };
+  const sources = {
+    overview: "domains/top_domains and text/top_domains_by_pages",
+    failures: "domains/diagnostics (attempts, failures, allocated budget)",
+    links: "frontier/links_by_domain (outlinks, distinct outlinks)",
+    correlation: "frontier/priority_score_by_domain (spearman, pearson, scored pairs)",
+  };
+  const update = () => {
+    explorerState.query = search.value;
+    explorerState.sort = sort.value;
+    const ranked = DomainMetrics.rank(records, sort.value, explorerState.ascending);
+    const filtered = ranked.filter((r) => r.domain.toLowerCase().includes(search.value.trim().toLowerCase()));
+    status.textContent = `${filtered.length} of ${ranked.length} ranked domains`;
+    output.textContent = "";
+    if (!ranked.length) {
+      output.append(html("div", { class: "explorer-empty" },
+        html("h3", { text: `No ${DOMAIN_FIELDS[sort.value][0].toLowerCase()} records for cycle ${state.cycle}` }),
+        html("p", { text: "This snapshot does not contain eligible records for this ranking. Choose another metric or cycle." }),
+        html("p", { class: "foot" }, "To populate this view, log and export ", html("code", { text: sources[explorerState.mode] }), ".")));
+      return;
+    }
+    if (!filtered.length) {
+      output.append(html("p", { class: "empty", text: "No domains match your search. Clear the filter or try a shorter name." }));
+      return;
+    }
+    const body = html("tbody");
+    for (const r of filtered) {
+      body.append(html("tr", {}, html("th", { scope: "row" }, button({ class: "domain-link", text: r.domain }, (e) => openDomain(r.domain, e.currentTarget))),
+        ...mode.fields.map((key) => html("td", { class: key === sort.value ? "ranked-value" : "", text: domainValue(r, key) }))));
+    }
+    output.append(html("p", { class: "table-scroll-hint", text: "Scroll the table horizontally to compare all columns." }), html("div", { class: "tbl-wrap", tabindex: "0", role: "region", "aria-label": "Domain rankings, scroll horizontally for more columns" }, html("table", { class: "data explorer-table" },
+      html("thead", {}, html("tr", {}, html("th", { scope: "col", text: "Domain" }), ...mode.fields.map((key) => html("th", { scope: "col", "aria-sort": key === sort.value ? (explorerState.ascending ? "ascending" : "descending") : null, text: DOMAIN_FIELDS[key][0] })))), body)));
+  };
+  search.addEventListener("input", update);
+  sort.addEventListener("change", update);
+  box.append(modes, context, html("div", { class: "search-row" }, search,
+    html("label", { class: "field" }, "Rank by", sort), order, status),
+    output, html("details", { class: "metric-help" }, html("summary", { text: "About these metrics" }),
+      html("p", { class: "explorer-note", text: explanations[explorerState.mode] })));
+  update();
+  return box;
+}
+
+function appendDomainDetails(drawer, domain) {
+  const r = DomainMetrics.domains(DATA, state.cycle).find((r) => r.domain === domain);
+  drawer.append(html("h3", { text: `Cycle ${state.cycle} diagnostics` }));
+  if (r) {
+    const details = html("dl", { class: "domain-facts" });
+    for (const key of ["pages", "en", "edu", "ft", "httpErrors", "attempts", "failures", "failureRate", "budget", "budgetUse", "outlinks", "distinctOutlinks", "spearman", "pearson", "pairs"]) {
+      if (domainValue(r, key) === "—") continue;
+      details.append(html("dt", { text: DOMAIN_FIELDS[key][0] }), html("dd", { text: domainValue(r, key) }));
+    }
+    drawer.append(details.childElementCount ? details : html("p", { class: "empty", text: "No diagnostics exported for this cycle." }));
+  }
+  drawer.append(html("details", { class: "metric-help" }, html("summary", { text: "About these metrics" }),
+    html("p", { class: "foot", text: "Only exported values are shown. Budget is the actual domain allocation, not the configured domain cap. Correlations need at least 3 scored pairs." })));
+  drawer.append(html("h3", { text: "Example crawled pages" }));
+  const examples = DomainMetrics.examples(DATA, domain, state.cycle);
+  if (!examples.length) {
+    drawer.append(html("p", { class: "empty", text: `No page examples exported for this domain in cycle ${state.cycle}.` }),
+      html("details", { class: "metric-help" }, html("summary", { text: "How to add examples" }),
+        html("p", { class: "foot" }, "Log and export ", html("code", { text: "domains/page_examples" }), " with actual crawled URLs.")));
+  } else {
+    const list = html("ul", { class: "page-examples" });
+    for (const page of examples.slice(0, 20)) {
+      const facts = [];
+      if (DomainMetrics.finite(page.status)) facts.push(`HTTP ${page.status}`);
+      if (DomainMetrics.finite(page["FineWeb-Edu"])) facts.push(`FineWeb-Edu ${F.score(page["FineWeb-Edu"])}`);
+      if (DomainMetrics.finite(page["fastText quality"])) facts.push(`fastText ${F.score(page["fastText quality"])}`);
+      list.append(html("li", {}, html("a", { href: page.url, target: "_blank", rel: "noopener noreferrer", text: page.title || page.url }),
+        page.title && html("div", { class: "example-url", text: page.url }), html("p", { class: "foot", text: facts.join(" · ") })));
+    }
+    drawer.append(html("p", { class: "foot", text: `${Math.min(examples.length, 20)} exported examples for cycle ${state.cycle}. Links open the current web page; content may have changed since the crawl.` }), list);
+  }
+}
+
+function renderFigureSearch() {
+  const query = document.getElementById("figure-search").value.trim().toLowerCase();
+  const results = document.getElementById("figure-results");
+  const status = document.getElementById("figure-count");
+  results.textContent = "";
+  results.hidden = !query;
+  status.textContent = "";
+  if (!query) return;
+  const matches = SECTIONS.flatMap((sec) => sec.charts.map((spec, i) => ({ sec, spec, i })))
+    .filter(({ sec, spec }) => [sec.title, spec.title, spec.sub, spec.foot, ...specKeys(spec)].filter(Boolean).join(" ").toLowerCase().includes(query));
+  status.textContent = `${matches.length} figure${matches.length === 1 ? "" : "s"} found`;
+  if (!matches.length) results.append(html("p", { class: "empty", text: "No figures match. Try a metric such as quality, failures, or outlinks." }));
+  for (const { sec, spec, i } of matches) {
+    results.append(button({ class: "figure-result" }, () => {
+      document.getElementById("figure-search").value = "";
+      renderFigureSearch();
+      selectTab(sec.id);
+      const card = document.getElementById(`figure-${sec.id}-${i}`);
+      const disclosure = card.closest("details");
+      if (disclosure) disclosure.open = true;
+      card.scrollIntoView({ block: "start" });
+      card.focus({ preventScroll: true });
+    }));
+    results.lastChild.append(html("strong", { text: spec.title }), html("span", { text: sec.title }));
+  }
 }
 
 // ---- Wiring ---------------------------------------------------------------------------------------------------------
@@ -1072,6 +1280,20 @@ function initTheme() {
 
 function main() {
   initTheme();
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty("--filter-height", document.querySelector(".filters").offsetHeight + "px");
+  }).observe(document.querySelector(".filters"));
+  document.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest(".figure-finder")) document.getElementById("figure-results").hidden = true;
+    if (!e.target.closest(".run-details")) document.querySelector(".run-details").open = false;
+  });
+  document.addEventListener("keydown", (e) => {
+    const details = document.querySelector(".run-details");
+    if (e.key === "Escape" && details.open) {
+      details.open = false;
+      details.querySelector("summary").focus();
+    }
+  });
   window.addEventListener("error", (e) => {
     // Two reports are noise. The ResizeObserver notice is harmless: the resize lands a frame later. A bare "Script
     // error." has no details to show and usually comes from a browser extension; the dashboard reports its own errors.
@@ -1098,7 +1320,7 @@ function main() {
   // Arrow keys, Home and End move between tabs, as in any tab list.
   document.getElementById("tabs").addEventListener("keydown", (e) => {
     const i = TABS.findIndex((t) => t.id === state.tab);
-    const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
+    const to = { ArrowDown: i + 1, ArrowUp: i - 1, ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: TABS.length - 1 }[e.key];
     if (to == null || !TABS[to]) return;
     e.preventDefault();
     selectTab(TABS[to].id, true);
@@ -1109,6 +1331,7 @@ function main() {
     switchRun();
   });
   document.getElementById("f-cycle").addEventListener("change", (e) => {
+    if (closeDrawer) closeDrawer(false);
     state.cycle = +e.target.value;
     render();
   });
@@ -1118,6 +1341,22 @@ function main() {
       render();
     });
   }
+  document.getElementById("figure-search").addEventListener("input", renderFigureSearch);
+  document.getElementById("figure-search").addEventListener("focus", renderFigureSearch);
+  document.querySelector(".figure-finder").addEventListener("focusout", (e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) document.getElementById("figure-results").hidden = true;
+  });
+  document.getElementById("figure-search").addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.currentTarget.value = "";
+      renderFigureSearch();
+    }
+    if (e.key === "ArrowDown") {
+      const first = document.querySelector(".figure-result");
+      if (first) { e.preventDefault(); first.focus(); }
+    }
+  });
+  document.getElementById("f-section").addEventListener("change", (e) => selectTab(e.target.value));
   switchRun();
 }
 
