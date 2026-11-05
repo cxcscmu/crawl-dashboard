@@ -13,24 +13,35 @@ const { html, formats: F } = Charts;
 //   { label, per, perFn, cumFn }      a key, plus functions that derive the value for runs that don't log it
 // Chart types: line, stack (stacked columns), hist, bars (top-N lists from a per-cycle table), note.
 
+// Tiles follow the View toggle like the charts: per is the cycle's own value, cum the running value (shown when the
+// run logs it). A tile with only per stays per cycle in both views; its scope label says so.
 const KPIS = [
   // wall/ and fetch/ hold the same running total; wall/ is the one every run has (the prod baseline has no fetch/
   // total, and crawl 239994's fetch/ total repeats cycle 1 at cycle 2).
-  { label: "Pages fetched, total", key: ["wall/pages_cumulative", "fetch/pages_cumulative"], unit: "count", addedKey: "fetch/pages", added: "this cycle" },
-  { label: "fastText quality, mean", key: "text/fasttext_quality_score_mean_per_cycle", unit: "score", good: "up" },
-  { label: "Pages ≥ DCLM threshold", key: "text/fasttext_quality_score_ge_0p018112_pct_per_cycle", unit: "pct", good: "up" },
-  { label: "FineWeb-Edu, mean", key: "text/fineweb_edu_score_mean_per_cycle", unit: "score", good: "up" },
-  { label: "English share", key: "text/english_pct", unit: "pct", good: "up" },
-  { label: "Domains seen, total", key: "domains/domains_total", unit: "count", addedKey: "domains/new_domains", added: "new this cycle" },
-  { label: "Priority ↔ score Spearman", key: "frontier/priority_vs_page_score_spearman", unit: "corr", good: "up" },
-  { label: "Pages per hour", key: "speed/pages_per_hour", unit: "count", good: "up" },
+  {
+    label: "Pages fetched", per: ["fetch/pages", "wall/pages"], cum: ["wall/pages_cumulative", "fetch/pages_cumulative"], unit: "count", good: "up",
+    cumAdded: { key: ["fetch/pages", "wall/pages"], text: "this cycle" },
+  },
+  { label: "fastText quality, mean", per: "text/fasttext_quality_score_mean_per_cycle", cum: "text/fasttext_quality_score_mean_cumulative", unit: "score", good: "up" },
+  { label: "Pages ≥ DCLM threshold", per: "text/fasttext_quality_score_ge_0p018112_pct_per_cycle", cum: "text/fasttext_quality_score_ge_0p018112_pct_cumulative", unit: "pct", good: "up" },
+  { label: "FineWeb-Edu, mean", per: "text/fineweb_edu_score_mean_per_cycle", cum: "text/fineweb_edu_score_mean_cumulative", unit: "score", good: "up" },
+  { label: "English share", per: "text/english_pct", cum: "text/english_pct_cumulative", unit: "pct", good: "up" },
+  {
+    label: "Domains", per: "domains/domains", cum: "domains/domains_total", unit: "count", good: "up",
+    cumAdded: { key: "domains/new_domains", text: "new this cycle" },
+  },
+  { label: "Priority ↔ score Spearman", per: "frontier/priority_vs_page_score_spearman", unit: "corr", good: "up" },
+  { label: "Pages per hour", per: "speed/pages_per_hour", unit: "count", good: "up" },
 ];
+
+// Footnote for the charts read from a crawl's quality-<job> run, which export.py folds into the crawl's cycles.
+const QUALITY_SAMPLE = "From the crawl's offline quality sample: 20,000 pages per cycle, DataMan on 5,000 of the English ones.";
 
 const SECTIONS = [
   {
     id: "quality",
     title: "Page quality",
-    blurb: "Content scores of the English pages fetched. Higher is better for both scores.",
+    blurb: "Content scores of the English pages fetched. Higher is better for every score.",
     charts: [
       {
         type: "line", title: "fastText quality score (DCLM oh_eli5)", sub: "Mean over English pages", unit: "score",
@@ -58,13 +69,34 @@ const SECTIONS = [
       },
       { type: "hist", title: "FineWeb-Edu score distribution", per: "text/fineweb_edu_score_hist_per_cycle", cum: "text/fineweb_edu_score_hist_cumulative" },
       {
-        type: "line", title: "DataMan and Nemotron scores", sub: "Means over the per-cycle page sample", unit: "num", gap: "DataMan / Nemotron scores",
+        type: "line", title: "DataMan and Nemotron scores", sub: "Means over the quality sample's English pages", unit: "num", gap: "Quality sample",
         series: [
           { label: "DataMan overall", key: "quality/dataman_overall_mean" },
           { label: "Nemotron quality", key: "quality/nemotron_quality_mean" },
           { label: "Nemotron educational", key: "quality/nemotron_educational_mean" },
           { label: "Nemotron informational", key: "quality/nemotron_informational_mean" },
         ],
+        foot: QUALITY_SAMPLE,
+      },
+      {
+        type: "line", title: "Sampled pages above each model's cut", sub: "% of the quality sample's English pages, bot checks left out", unit: "pct", gap: "Quality sample",
+        series: [
+          { label: "fastText ≥ 0.018112", perFn: scaled("quality/fasttext_quality_share_above", 100) },
+          { label: "FineWeb-Edu ≥ 3", perFn: scaled("quality/fineweb_edu_share_above", 100) },
+          { label: "Nemotron quality ≥ 3", perFn: scaled("quality/nemotron_quality_share_above", 100) },
+          { label: "Nemotron educational ≥ 3", perFn: scaled("quality/nemotron_educational_share_above", 100) },
+          { label: "Nemotron informational ≥ 3", perFn: scaled("quality/nemotron_informational_share_above", 100) },
+          { label: "DataMan ≥ 4", perFn: scaled("quality/dataman_overall_share_above", 100) },
+        ],
+        foot: QUALITY_SAMPLE + " FineWeb-Edu here is on its 0–5 scale, not the crawler's 0–1.",
+      },
+      {
+        type: "line", title: "What the quality sample holds", sub: "% of the sampled pages", unit: "pct", gap: "Quality sample",
+        series: [
+          { label: "English", perFn: scaled("quality/english_share", 100) },
+          { label: "Bot-protection pages", perFn: scaled("quality/interstitial_share", 100) },
+        ],
+        foot: QUALITY_SAMPLE,
       },
     ],
   },
@@ -322,14 +354,24 @@ const SECTIONS = [
       },
       {
         type: "line", title: "Speed of each cycle", sub: "Pages per hour from the cycle's start to its end", unit: "count",
-        series: [{ label: "Pages per hour", perFn: millions("wall/cycle_pages_per_hour_millions") }],
+        series: [{ label: "Pages per hour", perFn: scaled("wall/cycle_pages_per_hour_millions", 1e6) }],
       },
       {
         type: "line", title: "Average speed so far", sub: "Pages per hour since the crawl started", unit: "count",
         series: [
-          { label: "Hours inside cycles", perFn: millions("wall/pages_per_crawl_hour_millions") },
-          { label: "All hours, downtime included", perFn: millions("wall/pages_per_wall_hour_millions") },
+          { label: "Hours inside cycles", perFn: scaled("wall/pages_per_crawl_hour_millions", 1e6) },
+          { label: "All hours, downtime included", perFn: scaled("wall/pages_per_wall_hour_millions", 1e6) },
         ],
+      },
+      {
+        type: "tableLine", title: "Pages per day", sub: "Day 1 is the crawl's first 24 hours; a cycle's pages are split over the days it ran", unit: "count",
+        table: "wall/pages_per_day", x: { col: "day of the crawl", title: "Day of the crawl" },
+        series: [{ label: "Pages", col: "pages (millions)", factor: 1e6 }],
+      },
+      {
+        type: "tableLine", title: "Hours crawled per day", sub: "Hours of each day inside kept cycles; the rest of the 24 was downtime", unit: "hours",
+        table: "wall/pages_per_day", x: { col: "day of the crawl", title: "Day of the crawl" },
+        series: [{ label: "Hours", col: "hours in kept cycles" }],
       },
       { type: "line", title: "Hours per cycle", sub: "From the cycle's start to its end", unit: "hours", series: [{ label: "Hours", key: "wall/cycle_hours" }] },
       {
@@ -415,9 +457,11 @@ function sumOf(keys) {
   return DATA.cycles.map((_, i) => arrays.reduce((t, a) => (a[i] == null ? t : (t || 0) + a[i]), null));
 }
 
-// The wall/ speeds are logged in millions; charts and tables show plain counts.
-function millions(key) {
-  return (d) => d.metrics[key]?.map((v) => (v == null ? null : v * 1e6)) ?? null;
+// For keys logged in other units: the wall/ speeds in millions (factor 1e6), the quality sample's shares as 0-1 (100).
+function scaled(key, factor) {
+  const fn = (d) => d.metrics[key]?.map((v) => (v == null ? null : v * factor)) ?? null;
+  fn.key = key; // for the key lists of cards a run doesn't log
+  return fn;
 }
 
 // Values for a series in the given view; falls back to per-cycle values when there is no cumulative twin.
@@ -442,7 +486,7 @@ function chartView(spec) {
 
 function specKeys(spec) {
   return [spec.table, spec.tableCum, spec.per, spec.cum, spec.x?.key,
-    ...(spec.series || []).flatMap((s) => [s.key, s.per, s.cum, ...(s.sum || []), ...(s.sumCum || [])].flat())].filter(Boolean);
+    ...(spec.series || []).flatMap((s) => [s.key, s.per, s.cum, s.perFn?.key, ...(s.sum || []), ...(s.sumCum || [])].flat())].filter(Boolean);
 }
 
 // Matches how newer runs compute text/english_pct_of_language_known: English share of pages whose language isn't "unknown".
@@ -654,7 +698,38 @@ function buildBars(spec) {
   };
 }
 
-const BUILDERS = { line: buildLine, stack: buildStack, hist: buildHist, bars: buildBars, note: (spec) => ({ note: spec.text, gap: true }) };
+// A line over the rows of the run's newest copy of a table (wall/pages_per_day: one row per day of the crawl).
+// spec: { table, x: {col, title}, series: [{label, col, factor}], unit }
+function buildTableLine(spec) {
+  const byCycle = DATA.tables[spec.table];
+  const t = byCycle && byCycle[Math.max(...Object.keys(byCycle).map(Number))];
+  if (!t || !t.data.length) return emptyCard(spec);
+  if (t.data.length < 2) return { empty: "The crawl ran less than two days.", keys: specKeys(spec) }; // logged, so no gap
+  const col = (name) => t.columns.indexOf(name);
+  const x = t.data.map((r) => r[col(spec.x.col)]);
+  const series = spec.series.map((s, k) => ({
+    label: s.label, slot: k + 1, values: t.data.map((r) => (r[col(s.col)] == null ? null : r[col(s.col)] * (s.factor || 1))),
+  }));
+  const fmt = F[spec.unit];
+  const height = (spec.height || 210) + (series.length > 1 ? 24 : 0);
+  // The newest day is still running; its "to" column says "(so far)".
+  const partial = String(t.data.at(-1)[col("to")] || "").includes("so far");
+  return {
+    height,
+    badge: state.view === "cum" ? "per day" : null,
+    foot: [partial ? `Day ${x.at(-1)} is still in progress.` : "", spec.foot || ""].filter(Boolean).join(" "),
+    draw: (host) => Charts.line(host, { name: spec.title, x, xTitle: spec.x.title, series, unit: spec.unit, fmt, height, legend: series.length > 1, selectedX: null }),
+    table: {
+      columns: [spec.x.title, "From", "To", ...series.map((s) => s.label)],
+      rows: t.data.map((r, i) => [String(x[i]), r[col("from (US Eastern)")], r[col("to")], ...series.map((s) => cell(s.values[i], tableFmt(spec.unit)))]),
+    },
+  };
+}
+
+const BUILDERS = {
+  line: buildLine, stack: buildStack, hist: buildHist, bars: buildBars, tableLine: buildTableLine,
+  note: (spec) => ({ note: spec.text, gap: true }),
+};
 
 // ---- Rendering ------------------------------------------------------------------------------------------------------
 
@@ -788,13 +863,15 @@ function renderKpis() {
   const box = document.getElementById("kpis");
   box.textContent = "";
   for (const k of KPIS) {
-    const values = metric(k.key);
+    // Also the running value when the run has no per-cycle one (the scope label says which it is).
+    const cum = (state.view === "cum" || !has(metric(k.per))) && has(metric(k.cum));
+    const values = metric(cum ? k.cum : k.per);
     if (!has(values)) continue;
     const v = values[i];
     const delta = html("div", { class: "delta" });
-    if (k.addedKey) {
-      const added = metric(k.addedKey);
-      if (added && added[i] != null) delta.append(`+${F[k.unit](added[i])} ${k.added}`);
+    const added = cum && k.cumAdded && metric(k.cumAdded.key);
+    if (added && added[i] != null) {
+      delta.append(`+${F[k.unit](added[i])} ${k.cumAdded.text}`);
     } else if (i > 0 && v != null && values[i - 1] != null) {
       const d = v - values[i - 1];
       const better = d === 0 ? null : (d > 0) === (k.good === "up");
@@ -804,7 +881,8 @@ function renderKpis() {
       delta.append(`${Charts.signed(d, k.unit)} vs. cycle ${DATA.cycles[i - 1]}`);
     }
     const sparkHost = html("div", { class: "spark-host" });
-    box.append(html("div", { class: "tile" }, html("div", { class: "label", text: k.label }), html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost));
+    const label = html("div", { class: "label" }, k.label, html("span", { class: "scope", text: cum ? " · so far" : " · this cycle" }));
+    box.append(html("div", { class: "tile" }, label, html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost));
     schedule(sparkHost, (host) => Charts.spark(host, values, i), resizer);
   }
 }

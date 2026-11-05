@@ -42,7 +42,10 @@ TABLES = {
     "domains/page_examples",
     "frontier/links_by_domain",
     "frontier/priority_score_by_domain",
+    "wall/pages_per_day",
 }
+# Tables each cycle re-logs in full (one row per day of the crawl so far); only the newest copy is kept.
+LATEST_ONLY_TABLES = {"wall/pages_per_day"}
 
 
 # The published page is public, so only the run settings it shows leave W&B (not, e.g., crawl_dir, a path on the cluster).
@@ -97,9 +100,29 @@ def load_table(run, path):
     return {"columns": table["columns"], "data": table["data"]}
 
 
+def add_quality_sample(api, project, run_id, by_cycle):
+    """Fold the crawl's offline quality sample into its cycles, if it has one.
+
+    results/studies/cycle-quality-scores logs a 20k-page sample per cycle as the run quality-<job> next to crawl-<job>,
+    with the same chain cycle numbers. Its keys (quality/*) don't occur in the crawl run, so nothing is overwritten.
+    """
+    if not run_id.startswith("crawl-"):
+        return None
+    sample_id = "quality-" + run_id.removeprefix("crawl-")
+    try:
+        sample = api.run(f"{project}/{sample_id}")
+    except wandb.errors.CommError:
+        return None
+    for cycle, record in merge_by_cycle(sample.scan_history(page_size=1000)).items():
+        if cycle in by_cycle:
+            by_cycle[cycle].update({k: v for k, v in record.items() if k not in by_cycle[cycle]})
+    return sample.id
+
+
 def export_run(api, project, run_id):
     run = api.run(f"{project}/{run_id}")
     by_cycle = merge_by_cycle(run.scan_history(page_size=1000))
+    sample_id = add_quality_sample(api, project, run_id, by_cycle)
     cycles = list(by_cycle)
     metrics, histograms, tables = {}, {}, defaultdict(dict)
 
@@ -111,9 +134,9 @@ def export_run(api, project, run_id):
             if kind == "histogram":
                 histograms[key] = [histogram(v) if isinstance(v, dict) else None for v in values]
             elif kind == "table-file" and key in TABLES:
-                for cycle, value in zip(cycles, values):
-                    if isinstance(value, dict) and value.get("path"):
-                        tables[key][str(cycle)] = load_table(run, value["path"])
+                logged = [(c, v) for c, v in zip(cycles, values) if isinstance(v, dict) and v.get("path")]
+                for cycle, value in logged[-1:] if key in LATEST_ONLY_TABLES else logged:
+                    tables[key][str(cycle)] = load_table(run, value["path"])
             continue
         numbers = [as_number(v) for v in values]
         if any(n is not None for n in numbers):
@@ -128,6 +151,7 @@ def export_run(api, project, run_id):
         "created_at": run.created_at,
         "exported_at": exported_at,
         "config": page_config(dict(run.config)),
+        "quality_sample": sample_id,
         "cycles": cycles,
         "metrics": metrics,
         "histograms": histograms,

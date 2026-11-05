@@ -59,6 +59,8 @@ The charts are drawn with [Plotly.js](https://plotly.com/javascript/) through th
 - English share of known-language pages: newer runs log `text/english_pct_of_language_known`. For runs that don't, the page computes it from the language table as English ÷ (all − unknown), which gives the same numbers on `crawl-237653`.
 - HTTP status classes are sums of the per-code shares (for example, 4xx = 403 + 404 + 410 + 429 + other 4xx).
 - Priorities logged as 0 in the seed cycle are left out of the priority chart.
+- Quality sample: when the project has a run `quality-<job>` next to `crawl-<job>` (the 20,000-page per-cycle sample from `results/studies/cycle-quality-scores` in webcrawler-progress), `export.py` folds its `quality/*` keys into the crawl's cycles. That fills the DataMan and Nemotron charts in Page quality; today only `crawl-237653` has one, covering its cycles 1-69.
+- The summary tiles follow the Per cycle / Cumulative toggle where the run logs both values; each tile says whether it's "this cycle" or "so far".
 - A running crawl logs its `wall/` timing keys for each cycle before the rest of its metrics. The cycle picker lists only cycles with the full metrics; the wall-clock charts in Speed run to the newest cycle.
 - The two top-domain tables come from different files.
   - `domains/top_domains` counts HTTP 200 records in the cycle's WARC index (CDX).
@@ -70,7 +72,7 @@ The charts are drawn with [Plotly.js](https://plotly.com/javascript/) through th
 ## Not in W&B for crawl-233150
 
 - **Fetch cache.** This run predates the cache; `crawl-237653` logs it.
-- **DataMan and Nemotron scores.** Only `quality-237653` has them: a 20k-page sample per cycle of the Common Crawl-style run.
+- **DataMan and Nemotron scores.** Only the Common Crawl-style run has a quality sample (`quality-237653`), which the page shows with that run.
 - **A random-priority baseline** for the priority-vs-score correlation.
 - **Downstream results.** These are tokens after the English filter per cycle (from the 53B runs), and DCLM Core with its 5 category scores for the 1B-1x pretrain (the prod rows in the sheet).
 

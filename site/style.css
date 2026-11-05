@@ -150,6 +150,7 @@ body.loading main { opacity: 0.5; transition: opacity 0.15s; }
 @media (min-width: 760px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .tile { min-width: 0; padding: 12px 14px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .tile .label { color: var(--ink-2); font-size: 12.5px; }
+.tile .scope { color: var(--muted); }
 .tile .value { margin-top: 2px; font-size: 24px; font-weight: 600; line-height: 1.2; }
 .tile .delta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 18px; color: var(--ink-2); font-size: 12px; }
 .arrow { font-size: 10px; }
