@@ -1011,7 +1011,7 @@ const EXPLORER_MODES = {
   correlation: { label: "Priority correlation", fields: ["spearman", "pearson", "pairs"] },
 };
 const DOMAIN_FIELDS = {
-  pages: ["Pages fetched", "count"], en: ["English pages", "count"], edu: ["FineWeb-Edu", "score"], ft: ["fastText", "score"],
+  pages: ["HTTP 200 pages", "count"], en: ["English pages (parsed)", "count"], edu: ["FineWeb-Edu", "score"], ft: ["fastText", "score"],
   httpErrors: ["HTTP 4xx/5xx", "count"], failures: ["Failed attempts", "count"], failureRate: ["Failure rate", "pct"],
   attempts: ["Attempts", "count"], budget: ["Allocated budget", "count"], budgetUse: ["Budget attempted", "pct"],
   outlinks: ["Outlinks", "count"], distinctOutlinks: ["Distinct outlinks", "count"],
@@ -1022,28 +1022,52 @@ function domainValue(record, key) {
   if (["spearman", "pearson"].includes(key) && (!(record.pairs >= 3) || Math.abs(v) > 1)) return "—";
   return cell(v, F[DOMAIN_FIELDS[key][1]]);
 }
+
+// Fields with a value in any cycle of the run. Modes and columns the run never logs stay hidden, so the explorer
+// doesn't fill up with empty views; a cycle that lacks a logged field still shows dashes.
+const loggedFieldsCache = new WeakMap();
+function loggedFields(data) {
+  if (!loggedFieldsCache.has(data)) {
+    const fields = new Set();
+    for (const c of data.cycles) {
+      for (const r of DomainMetrics.domains(data, c)) for (const k in DOMAIN_FIELDS) if (DomainMetrics.finite(r[k])) fields.add(k);
+    }
+    loggedFieldsCache.set(data, fields);
+  }
+  return loggedFieldsCache.get(data);
+}
+
 function renderExplorer() {
   const box = html("div", { class: "domain-explorer" });
+  const logged = loggedFields(DATA);
+  const fieldsOf = (m) => m.fields.filter((k) => logged.has(k));
+  const shown = Object.entries(EXPLORER_MODES).filter(([, m]) => fieldsOf(m).length);
+  if (!shown.some(([id]) => id === explorerState.mode)) {
+    explorerState.mode = shown[0]?.[0] ?? "overview";
+    explorerState.sort = fieldsOf(EXPLORER_MODES[explorerState.mode])[0];
+  }
   const modes = html("div", { class: "explorer-modes", role: "group", "aria-label": "Domain investigation" });
-  for (const [id, mode] of Object.entries(EXPLORER_MODES)) {
+  for (const [id, mode] of shown.length > 1 ? shown : []) {
     modes.append(button({ class: "tab", "data-mode": id, "aria-pressed": String(id === explorerState.mode), text: mode.label }, () => {
       explorerState.mode = id;
-      explorerState.sort = mode.fields[0];
+      explorerState.sort = fieldsOf(mode)[0];
       explorerState.ascending = false;
       renderSections();
       document.querySelector(`[data-mode="${id}"]`).focus({ preventScroll: true });
     }));
   }
   const mode = EXPLORER_MODES[explorerState.mode];
+  const fields = fieldsOf(mode).length ? fieldsOf(mode) : mode.fields;
+  if (!fields.includes(explorerState.sort)) explorerState.sort = fields[0];
   const records = DomainMetrics.domains(DATA, state.cycle);
   // Legacy runs may have scored-domain tables without any fetched-domain table.
   if (explorerState.mode === "overview" && !DomainMetrics.rank(records, explorerState.sort).length) {
-    explorerState.sort = mode.fields.find((key) => DomainMetrics.rank(records, key).length) || mode.fields[0];
+    explorerState.sort = fields.find((key) => DomainMetrics.rank(records, key).length) || fields[0];
   }
   const context = html("p", { class: "blurb", text: `Cycle ${state.cycle} · Per-cycle records · Select a domain for details` });
   const search = html("input", { type: "search", class: "search", placeholder: "Filter domains…", "aria-label": "Filter domains", value: explorerState.query });
   const sort = html("select", { "aria-label": "Rank domains by" });
-  for (const key of mode.fields) sort.append(html("option", { value: key, selected: key === explorerState.sort, text: DOMAIN_FIELDS[key][0] }));
+  for (const key of fields) sort.append(html("option", { value: key, selected: key === explorerState.sort, text: DOMAIN_FIELDS[key][0] }));
   const order = button({ class: "tbtn", text: explorerState.ascending ? "Lowest first" : "Highest first" }, () => {
     explorerState.ascending = !explorerState.ascending;
     order.textContent = explorerState.ascending ? "Lowest first" : "Highest first";
@@ -1052,7 +1076,7 @@ function renderExplorer() {
   const status = html("span", { class: "count", role: "status" });
   const output = html("div");
   const explanations = {
-    overview: "Fetched counts come from the WARC index; English-page quality comes from parsed/scored output. These populations can differ. Missing top-50 entries are unknown, not zero.",
+    overview: "The two page counts come from different files. HTTP 200 pages are counted in the cycle's WARC index; English pages are parsed pages the scorer rated English. They don't always agree per domain: some domains show more English pages than 200s (igenea.com in crawl 233150, for example), which is still being checked. Each list is a top 50, so a dash means the domain wasn't in that list, not zero.",
     failures: "HTTP errors cover recorded 4xx/5xx responses only. Failed attempts also include other download failures when logged. Failure rate = failed attempts ÷ attempts; budget attempted = attempts ÷ allocated budget. No per-domain budget is inferred from the run-wide cap.",
     links: "Outlinks are links extracted from pages on the source domain, not inbound links to that domain. Counts alone do not measure content quality; distinct outlinks indicate breadth.",
     correlation: "Priority versus fetched-page score within each domain. Signed correlations range from −1 to +1; lowest means most negative. Rankings require at least 3 scored pairs. They are descriptive, not a significance test; pair counts matter.",
@@ -1084,17 +1108,15 @@ function renderExplorer() {
     const body = html("tbody");
     for (const r of filtered) {
       body.append(html("tr", {}, html("th", { scope: "row" }, button({ class: "domain-link", text: r.domain }, (e) => openDomain(r.domain, e.currentTarget))),
-        ...mode.fields.map((key) => html("td", { class: key === sort.value ? "ranked-value" : "", text: domainValue(r, key) }))));
+        ...fields.map((key) => html("td", { class: key === sort.value ? "ranked-value" : "", text: domainValue(r, key) }))));
     }
     output.append(html("p", { class: "table-scroll-hint", text: "Scroll the table horizontally to compare all columns." }), html("div", { class: "tbl-wrap", tabindex: "0", role: "region", "aria-label": "Domain rankings, scroll horizontally for more columns" }, html("table", { class: "data explorer-table" },
-      html("thead", {}, html("tr", {}, html("th", { scope: "col", text: "Domain" }), ...mode.fields.map((key) => html("th", { scope: "col", "aria-sort": key === sort.value ? (explorerState.ascending ? "ascending" : "descending") : null, text: DOMAIN_FIELDS[key][0] })))), body)));
+      html("thead", {}, html("tr", {}, html("th", { scope: "col", text: "Domain" }), ...fields.map((key) => html("th", { scope: "col", "aria-sort": key === sort.value ? (explorerState.ascending ? "ascending" : "descending") : null, text: DOMAIN_FIELDS[key][0] })))), body)));
   };
   search.addEventListener("input", update);
   sort.addEventListener("change", update);
-  box.append(modes, context, html("div", { class: "search-row" }, search,
-    html("label", { class: "field" }, "Rank by", sort), order, status),
-    output, html("details", { class: "metric-help" }, html("summary", { text: "About these metrics" }),
-      html("p", { class: "explorer-note", text: explanations[explorerState.mode] })));
+  box.append(modes, context, html("p", { class: "explorer-note", text: explanations[explorerState.mode] }),
+    html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
   update();
   return box;
 }
@@ -1110,14 +1132,17 @@ function appendDomainDetails(drawer, domain) {
     }
     drawer.append(details.childElementCount ? details : html("p", { class: "empty", text: "No diagnostics exported for this cycle." }));
   }
-  drawer.append(html("details", { class: "metric-help" }, html("summary", { text: "About these metrics" }),
-    html("p", { class: "foot", text: "Only exported values are shown. Budget is the actual domain allocation, not the configured domain cap. Correlations need at least 3 scored pairs." })));
+  const logged = loggedFields(DATA);
+  if (logged.has("budget") || logged.has("spearman")) {
+    drawer.append(html("details", { class: "metric-help" }, html("summary", { text: "About these metrics" }),
+      html("p", { class: "foot", text: "Only exported values are shown. Budget is the actual domain allocation, not the configured domain cap. Correlations need at least 3 scored pairs." })));
+  }
+  // Only runs that log page examples get this section.
+  if (!DATA.tables?.["domains/page_examples"]) return;
   drawer.append(html("h3", { text: "Example crawled pages" }));
   const examples = DomainMetrics.examples(DATA, domain, state.cycle);
   if (!examples.length) {
-    drawer.append(html("p", { class: "empty", text: `No page examples exported for this domain in cycle ${state.cycle}.` }),
-      html("details", { class: "metric-help" }, html("summary", { text: "How to add examples" }),
-        html("p", { class: "foot" }, "Log and export ", html("code", { text: "domains/page_examples" }), " with actual crawled URLs.")));
+    drawer.append(html("p", { class: "empty", text: `No page examples exported for this domain in cycle ${state.cycle}.` }));
   } else {
     const list = html("ul", { class: "page-examples" });
     for (const page of examples.slice(0, 20)) {
