@@ -306,13 +306,37 @@ const SECTIONS = [
   {
     id: "speed",
     title: "Speed",
-    blurb: "Crawl throughput per cycle.",
+    blurb: "Crawl throughput and where the wall-clock time went. The wall-clock charts are logged for every cycle, including ones whose other metrics aren't in yet.",
     charts: [
+      {
+        type: "line", title: "Pages fetched over time", sub: "Running total by hours since the crawl started; flat stretches are downtime", unit: "count",
+        x: { key: "wall/elapsed_hours", title: "Hours since the crawl started" },
+        series: [{ label: "Pages fetched", key: "wall/pages_cumulative", cum: "wall/pages_cumulative" }],
+      },
       {
         type: "line", title: "Pages per hour", sub: "Fetch stage alone vs. the whole pipeline", unit: "count",
         series: [
           { label: "Fetch stage", key: "speed/pages_per_hour" },
           { label: "Whole pipeline", key: "speed/pipeline_pages_per_hour" },
+        ],
+      },
+      {
+        type: "line", title: "Speed of each cycle", sub: "Pages per hour from the cycle's start to its end", unit: "count",
+        series: [{ label: "Pages per hour", perFn: millions("wall/cycle_pages_per_hour_millions") }],
+      },
+      {
+        type: "line", title: "Average speed so far", sub: "Pages per hour since the crawl started", unit: "count",
+        series: [
+          { label: "Hours inside cycles", perFn: millions("wall/pages_per_crawl_hour_millions") },
+          { label: "All hours, downtime included", perFn: millions("wall/pages_per_wall_hour_millions") },
+        ],
+      },
+      { type: "line", title: "Hours per cycle", sub: "From the cycle's start to its end", unit: "hours", series: [{ label: "Hours", key: "wall/cycle_hours" }] },
+      {
+        type: "line", title: "Crawling vs. downtime", sub: "Hours so far; downtime is job start-up, restarts and outages", unit: "hours",
+        series: [
+          { label: "Crawling", key: "wall/crawl_hours" },
+          { label: "Downtime", key: "wall/downtime_hours" },
         ],
       },
       { type: "line", title: "Pages per second per fetch task", sub: "Mean over fetch tasks", unit: "num", series: [{ label: "Pages/s per task", key: "speed/pages_per_s_per_fetch_task_mean" }] },
@@ -391,6 +415,11 @@ function sumOf(keys) {
   return DATA.cycles.map((_, i) => arrays.reduce((t, a) => (a[i] == null ? t : (t || 0) + a[i]), null));
 }
 
+// The wall/ speeds are logged in millions; charts and tables show plain counts.
+function millions(key) {
+  return (d) => d.metrics[key]?.map((v) => (v == null ? null : v * 1e6)) ?? null;
+}
+
 // Values for a series in the given view; falls back to per-cycle values when there is no cumulative twin.
 function pick(s, view) {
   if (view === "cum") {
@@ -412,7 +441,7 @@ function chartView(spec) {
 }
 
 function specKeys(spec) {
-  return [spec.table, spec.tableCum, spec.per, spec.cum,
+  return [spec.table, spec.tableCum, spec.per, spec.cum, spec.x?.key,
     ...(spec.series || []).flatMap((s) => [s.key, s.per, s.cum, ...(s.sum || []), ...(s.sumCum || [])].flat())].filter(Boolean);
 }
 
@@ -487,6 +516,9 @@ function buildLine(spec) {
     series.push({ label: s.label, values, slot: k + 1 }); // color follows the series, not its rank
   });
   if (!series.length) return emptyCard(spec);
+  // Charts with spec.x plot against that metric (hours since the start, say) instead of the cycle number.
+  const x = spec.x ? metric(spec.x.key) : DATA.cycles;
+  if (!has(x)) return emptyCard(spec);
   let band = null;
   if (spec.band) {
     const lo = pick(spec.band.lo, view);
@@ -502,11 +534,15 @@ function buildLine(spec) {
     height,
     foot: [missing.length ? `Not logged in this run: ${missing.join(", ")}.` : "", spec.foot || ""].filter(Boolean).join(" "),
     draw: (host) =>
-      Charts.line(host, { name: spec.title, x: DATA.cycles, series, band, unit: spec.unit, fmt, zero: spec.zero, height, legend, selectedX: state.cycle }),
+      Charts.line(host, {
+        name: spec.title, x, xTitle: spec.x?.title, series, band, unit: spec.unit, fmt, zero: spec.zero, height, legend,
+        selectedX: spec.x ? null : state.cycle,
+      }),
     table: {
-      columns: ["Cycle", ...series.map((s) => s.label), ...(band ? [band.loLabel, band.hiLabel] : [])],
+      columns: ["Cycle", ...(spec.x ? [spec.x.title] : []), ...series.map((s) => s.label), ...(band ? [band.loLabel, band.hiLabel] : [])],
       rows: DATA.cycles.map((c, i) => [
         String(c),
+        ...(spec.x ? [cell(x[i], F.num)] : []),
         ...series.map((s) => cell(s.values[i], tf)),
         ...(band ? [cell(band.lo[i], tf), cell(band.hi[i], tf)] : []),
       ]),
@@ -736,17 +772,19 @@ function renderFilters() {
   }
   const cycleSel = document.getElementById("f-cycle");
   cycleSel.textContent = "";
-  const tag = (c) => (c === LATEST ? " (latest)" : c > LATEST ? " (partial)" : "");
-  for (const c of DATA.cycles.slice().reverse()) {
-    cycleSel.append(html("option", { value: c, selected: c === state.cycle, text: `${c}${tag(c)}` }));
+  // Only cycles with the full metrics: newer ones have just the wall-clock keys, which the Speed charts show anyway.
+  for (const c of DATA.cycles.filter((c) => c <= LATEST).reverse()) {
+    cycleSel.append(html("option", { value: c, selected: c === state.cycle, text: c === LATEST ? `${c} (latest)` : String(c) }));
   }
   for (const b of document.querySelectorAll("[data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === state.view));
 }
 
 function renderKpis() {
   const i = cycleIndex();
+  const newest = DATA.cycles.at(-1);
   document.getElementById("kpi-title").textContent =
-    `Cycle ${state.cycle} summary` + (state.cycle === LATEST ? "" : ` · latest complete: ${LATEST}`);
+    `Cycle ${state.cycle} summary` + (state.cycle === LATEST ? "" : ` · latest complete: ${LATEST}`) +
+    (newest > LATEST ? ` · cycles ${LATEST + 1}–${newest} have only timing so far (see Speed)` : "");
   const box = document.getElementById("kpis");
   box.textContent = "";
   for (const k of KPIS) {
@@ -1261,7 +1299,7 @@ async function switchRun() {
     reportError(err);
   }
   LATEST = latestCompleteCycle(DATA);
-  if (!DATA.cycles.includes(state.cycle)) state.cycle = LATEST;
+  if (!DATA.cycles.includes(state.cycle) || state.cycle > LATEST) state.cycle = LATEST;
   render();
 }
 

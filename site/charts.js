@@ -47,6 +47,7 @@ const Charts = (() => {
     kbps: (v) => trim(v, v >= 100 ? 0 : 1) + " kbps",
     gb: (v) => trim(v, v >= 100 ? 0 : 1) + " GB",
     kb: (v) => trim(v, v >= 100 ? 0 : 1) + " KB",
+    hours: (v) => trim(v, v >= 100 ? 0 : 1) + " h",
     auto: (v) =>
       Math.abs(v) >= 1e5 ? compact(v) : Number.isInteger(v) ? v.toLocaleString("en-US") : String(+v.toPrecision(4)),
   };
@@ -139,7 +140,8 @@ const Charts = (() => {
       title: { text: o.xTitle || "Cycle", font: { size: 11, color: p.muted }, standoff: 4 },
       automargin: true,
     };
-    if (o.x && o.x.length <= 12) {
+    // Few cycles get one tick each; an x of hours (no selected cycle) keeps Plotly's own round ticks.
+    if (o.x && o.x.length <= 12 && o.selectedX != null) {
       xaxis.tickvals = o.x;
       xaxis.ticktext = o.x.map((c) => (c === o.selectedX ? `<b>${c}</b>` : String(c)));
     }
