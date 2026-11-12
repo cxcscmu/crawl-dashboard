@@ -125,8 +125,11 @@ const Raw = (() => {
         if (p.parsed) facts.push(p.in_cdx200 ? "in WARC index as 200" : "not in WARC index as 200");
         if (p.parsed && p.outlinks >= 0) facts.push(`${p.outlinks} outlinks`);
         const href = safeUrl(p.url);
-        const item = html("li", {}, href ? html("a", { href, target: "_blank", rel: "noopener noreferrer", text: p.title || p.url }) : html("span", { text: p.title || p.url }),
-          p.title && html("div", { class: "example-url", text: p.url }), html("p", { class: "foot", text: facts.join(" · ") }));
+        // The link is the page's address; the title is plain text above it (titles can be long or spam).
+        const title = (p.title || "").trim();
+        const item = html("li", {}, title && html("div", { class: "example-title", text: title.length > 140 ? title.slice(0, 140) + "…" : title }),
+          href ? html("a", { href, target: "_blank", rel: "noopener noreferrer", text: p.url }) : html("span", { text: p.url }),
+          html("p", { class: "foot", text: facts.join(" · ") }));
         if (!p.text) {
           const to = /lastModified=\d+: (\S+)/.exec(p.pst || "");
           const why = (p.status || "").startsWith("fetch_redir") ? `No text under this URL: it redirects${to ? " to " + to[1] : ""}, and the text is stored under the page it leads to.`
@@ -210,7 +213,7 @@ const Raw = (() => {
       title: "Priority vs page score", sub: "Spearman correlation per cycle", height: 260,
       draw: (h) => Charts.line(h, { name: "Priority vs page score per cycle", x: R.cycles, series: corr, unit: "corr", fmt: F.corr, height: 260, legend: true, selectedX: cycle }),
       table: seriesTable(R.cycles, "Cycle", corr, "corr"),
-      foot: "Priority = the score a URL was selected with; page score = the run's combined quality score for the page once fetched. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs" +
+      foot: "Page score = the page's own quality score once fetched: its fastText quality and FineWeb-Edu scores, each turned into a percentile, averaged. Priority = what the URL was selected with: the average page score of the already-fetched pages that link to it. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs" +
         (hasPriority ? `, ${F.pct(S.spearman_within_negative_pct)} of which are negative in cycle ${cycle}.` : ".") + " The first cycle is the seed list, where every priority is 0.",
     }));
     if (S.hist) {
