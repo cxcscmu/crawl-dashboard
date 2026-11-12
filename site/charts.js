@@ -136,7 +136,7 @@ const Charts = (() => {
       showline: true,
       linecolor: p.axis,
       ticks: "",
-      hoverformat: "d",
+      hoverformat: o.xHoverFormat || "d", // cycles are whole numbers; a chart over another x sets its own
       title: { text: o.xTitle || "Cycle", font: { size: 11, color: p.muted }, standoff: 4 },
       automargin: true,
     };

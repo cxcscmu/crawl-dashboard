@@ -210,7 +210,7 @@ const Raw = (() => {
       title: "Priority vs page score", sub: "Spearman correlation per cycle", height: 260,
       draw: (h) => Charts.line(h, { name: "Priority vs page score per cycle", x: R.cycles, series: corr, unit: "corr", fmt: F.corr, height: 260, legend: true, selectedX: cycle }),
       table: seriesTable(R.cycles, "Cycle", corr, "corr"),
-      foot: "Priority = the score a URL was selected with; page score = fastText score after the fetch. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs" +
+      foot: "Priority = the score a URL was selected with; page score = the run's combined quality score for the page once fetched. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs" +
         (hasPriority ? `, ${F.pct(S.spearman_within_negative_pct)} of which are negative in cycle ${cycle}.` : ".") + " The first cycle is the seed list, where every priority is 0.",
     }));
     if (S.hist) {
@@ -233,11 +233,11 @@ const Raw = (() => {
       grid.append(card({
         title: `Page score by priority, cycle ${cycle}`, sub: "Do higher-priority pages score higher once fetched?", height: 280,
         draw: (h) => Charts.line(h, {
-          name: `Median page score for each priority band in cycle ${cycle}`, x: px, series: median, unit: "score", fmt: F.score, height: 280, legend: true, xTitle: `Priority the URL was selected with (start of each ${F.num(1 / n)}-wide band)`,
+          name: `Median page score for each priority band in cycle ${cycle}`, x: px, series: median, unit: "score", fmt: F.score, height: 280, legend: true, xHoverFormat: ".3f", xTitle: `Priority the URL was selected with (start of each ${F.num(1 / n)}-wide band)`,
           band: { lo: q(0.25), hi: q(0.75), label: "Middle half of pages", loLabel: "25th percentile", hiLabel: "75th percentile", slot: 1 },
         }),
         table: () => ({ columns: ["Priority", "Pages", "25th percentile", "Median", "75th percentile"], rows: bands.map((r, i) => [px[i], F.int(r.total), F.score(q(0.25)[i]), F.score(q(0.5)[i]), F.score(q(0.75)[i])]) }),
-        foot: `${F.count(S.counts.pairs)} scored pages that were on the fetch list, grouped into priority bands ${F.num(1 / n)} wide. A flat line means priority tells little about the score.`,
+        foot: `${F.count(S.counts.pairs)} scored pages that were on the fetch list, grouped into priority bands ${F.num(1 / n)} wide. Hover a point for that band's median and middle half. A flat line would mean priority tells nothing about the score.`,
       }));
     }
     const bx = S.buckets.map((b) => b.label);
