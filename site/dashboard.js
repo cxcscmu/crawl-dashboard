@@ -157,6 +157,12 @@ const SECTIONS = [
     charts: [],
   },
   {
+    id: "raw",
+    title: "Raw data check",
+    blurb: "Read straight from the crawl's segments and WARC index on the cluster, not from W&B: why a domain's counts disagree, how priority relates to the page score, fetch outcomes, links, and example pages with their text.",
+    charts: [],
+  },
+  {
     id: "domains",
     title: "Domain diversity",
     blurb: "How many sites the crawl reaches and how concentrated it is. Click a domain in any list for its numbers across cycles.",
@@ -908,6 +914,7 @@ function sectionStatus() {
     }
   }
   if (DomainMetrics.domains(DATA, state.cycle).length) hasData.add("explorer");
+  if (Raw.has(state.run)) hasData.add("raw");
   return { gaps, hasData };
 }
 
@@ -927,7 +934,7 @@ function renderSections() {
         html("h2", { id: sec.id + "-h", text: sec.title }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
         sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && html("p", { class: "blurb", text: sec.cacheNote }),
-        sec.id === "explorer" ? renderExplorer() : renderSectionFigures(sec)
+        sec.id === "explorer" ? renderExplorer() : sec.id === "raw" ? renderRaw() : renderSectionFigures(sec)
       )
     );
   } else {
@@ -985,7 +992,7 @@ function renderGaps(gaps) {
 
 const NAV_GROUPS = [
   { label: "Content", ids: ["quality", "language", "usability"] },
-  { label: "Domains", ids: ["explorer", "domains", "priority"] },
+  { label: "Domains", ids: ["explorer", "raw", "domains", "priority"] },
   { label: "Crawl operations", ids: ["fetch", "cache", "speed", "storage"] },
   { label: "Reference", ids: ["downstream", "all"] },
 ];
@@ -1105,6 +1112,7 @@ function openDomain(domain, opener) {
   history.append(html("p", { class: "foot", text: "A dash means no exported value for that cycle and column, not zero. Original domain lists contain only the top 50." }));
 
   appendDomainDetails(drawer, domain);
+  Raw.appendDomain(drawer, state.run, state.cycle, domain); // example pages with text, where the run has them
   drawer.hidden = false;
   close.focus();
   const onKey = (e) => e.key === "Escape" && closeDrawer();
@@ -1116,6 +1124,34 @@ function openDomain(domain, opener) {
   };
   close.addEventListener("click", () => closeDrawer());
   document.addEventListener("keydown", onKey);
+}
+
+// A side panel with a title and a Close button; fill adds the content. Used by the raw-data section.
+function openPanel(title, fill, opener) {
+  if (closeDrawer) closeDrawer(false);
+  const drawer = document.getElementById("drawer");
+  drawer.textContent = "";
+  const close = html("button", { type: "button", class: "tbtn", text: "Close" });
+  drawer.append(html("div", { class: "drawer-head" }, html("h2", { id: "drawer-title", text: title }), close));
+  fill(drawer);
+  drawer.hidden = false;
+  close.focus();
+  const onKey = (e) => e.key === "Escape" && closeDrawer();
+  closeDrawer = (restoreFocus = true) => {
+    drawer.hidden = true;
+    document.removeEventListener("keydown", onKey);
+    closeDrawer = null;
+    if (restoreFocus && opener && opener.isConnected) opener.focus();
+  };
+  close.addEventListener("click", () => closeDrawer());
+  document.addEventListener("keydown", onKey);
+}
+
+function renderRaw() {
+  if (!Raw.has(state.run)) {
+    return html("p", { class: "empty", text: "This run hasn't been read from the raw crawl data. Crawl 233150 has (cycles 1–9)." });
+  }
+  return Raw.render({ run: state.run, cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
 }
 
 // ---- Search and domain investigation -------------------------------------------------------------------------------
@@ -1192,7 +1228,7 @@ function renderExplorer() {
   const status = html("span", { class: "count", role: "status" });
   const output = html("div");
   const explanations = {
-    overview: "The two page counts come from different files. HTTP 200 pages are counted in the cycle's WARC index; English pages are parsed pages the scorer rated English. They don't always agree per domain: some domains show more English pages than 200s (igenea.com in crawl 233150, for example), which is still being checked. Each list is a top 50, so a dash means the domain wasn't in that list, not zero.",
+    overview: "The two page counts come from different files. HTTP 200 pages are counted in the cycle's WARC index; English pages are parsed pages the scorer rated English. They don't always agree per domain: some domains show more English pages than 200s (igenea.com in crawl 233150, for example), because a page is counted again each time another URL redirects to it; the Raw data check section shows this per domain. Each list is a top 50, so a dash means the domain wasn't in that list, not zero.",
     failures: "HTTP errors cover recorded 4xx/5xx responses only. Failed attempts also include other download failures when logged. Failure rate = failed attempts ÷ attempts; budget attempted = attempts ÷ allocated budget. No per-domain budget is inferred from the run-wide cap.",
     links: "Outlinks are links extracted from pages on the source domain, not inbound links to that domain. Counts alone do not measure content quality; distinct outlinks indicate breadth.",
     correlation: "Priority versus fetched-page score within each domain. Signed correlations range from −1 to +1; lowest means most negative. Rankings require at least 3 scored pairs. They are descriptive, not a significance test; pair counts matter.",
@@ -1364,6 +1400,7 @@ async function switchRun() {
   document.body.classList.add("loading"); // keep the old render, dimmed, until the new run is in
   try {
     DATA = await loadRun(entry);
+    await Raw.loadIndex(entry.id); // optional: only runs read from the raw crawl data have it
   } catch (err) {
     showError(err.message);
     return;

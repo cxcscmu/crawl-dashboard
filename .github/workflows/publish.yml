@@ -49,6 +49,19 @@ jobs:
         env:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
 
+      # The Raw data check section's files (built by rawdata.py from the crawl's segments, see README) are kept as a
+      # release file, not in the repo. Without the release the page is published without that section's data.
+      - name: Add the raw-data files
+        run: |
+          if gh release download raw-data --repo "$GITHUB_REPOSITORY" --pattern raw-data.tar.gz --dir "$RUNNER_TEMP"; then
+            tar xzf "$RUNNER_TEMP/raw-data.tar.gz" -C site/data
+            du -sh site/data/raw
+          else
+            echo "No raw-data release; publishing without it."
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

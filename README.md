@@ -25,6 +25,26 @@ Your W&B account needs to be in the `cxcscmu` team. `wandb login` saves the key 
 
 Each run becomes `site/data/<run>.js`, and `site/data/runs.js` lists them for the page's run picker. Exporting a run again replaces it in place. Exporting `runs.txt` or a tag makes the picker list exactly those runs. Run ids on the command line are added to the list instead. If there's nothing to export, the script stops with an error and writes nothing. Downloaded W&B tables are cached in `.wandb_cache/`, so a refresh only fetches what's new.
 
+## Raw data check (optional)
+
+The **Raw data check** section doesn't come from W&B. It shows numbers read straight from a crawl's segments and WARC index on the cluster: per-domain count mismatches and their cause, priority vs page score, fetch outcomes, links, and example pages with their text. `rawdata.py` builds its files from the per-cycle extracts (kept outside this repo, in `~/crawl-data` by default):
+
+```bash
+.venv/bin/pip install pandas
+.venv/bin/python rawdata.py crawl-233150 233150 1-9    # run id on the page, folder prefix, cycles
+```
+
+This writes `site/data/raw/crawl-233150.js` plus one folder of domain tables and example pages. A run without these files simply has an empty Raw data check tab.
+
+To put a new build on the live page, replace the release file the publish job downloads (the next hourly run picks it up):
+
+```bash
+tar czf raw-data.tar.gz -C site/data raw
+gh release upload raw-data raw-data.tar.gz --clobber      # first time: gh release create raw-data raw-data.tar.gz
+```
+
+A published GitHub Pages site can be at most 1 GB, so keep `site/data/raw` well under that.
+
 ## View it
 
 The data files aren't in the repo, so export at least one run first. Then open `site/index.html` in a browser. Double-clicking works: the data loads as script files, so no local server is needed. To serve it instead, run `python3 -m http.server -d site 8000`. The charts use Plotly, which the page loads from cdn.jsdelivr.net, so the browser needs an internet connection.
