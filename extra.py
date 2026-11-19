@@ -30,7 +30,7 @@ sys.path.insert(0, HOME + "/extract-src")
 import crawl_logger as cl  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "site" / "data" / "raw"
-TABLE_KEYS = {"domains/top_domains", "domains/top_domains_cumulative", "domains/top_new_domains", "text/languages",
+TABLE_KEYS = {"domains/score_by_rank", "domains/top_domains", "domains/top_domains_cumulative", "domains/top_new_domains", "text/languages",
               "text/languages_cumulative", "fetch/top_failing_domains", "text/top_domains_by_pages", "text/top_domains_by_fineweb_edu"}
 
 
@@ -108,7 +108,39 @@ def domain_tables(path):
             "text/top_domains_by_fineweb_edu": cl.table(cols, [row(x) for x in by_edu.itertuples()])}
 
 
-def build(run_id, prefix):
+RANKS = [("top10", "Top 10", 1, 10), ("11_100", "11–100", 11, 100), ("101_1k", "101–1,000", 101, 1000),
+         ("1k_10k", "1,001–10,000", 1001, 10000), ("rest", "10,001 and below", 10001, 10**12)]
+
+
+def rank_buckets(cdx_path, ext_path):
+    """Domains grouped by rank (most HTTP 200s first, every domain in the WARC index): each group's share of the cycle's
+    pages, and the mean page score / FineWeb-Edu / fastText of its English pages, weighted by scored pages. Scores come
+    from the extract's per-domain table (every parsed page, domains with 3+ pages), so domains with 1-2 pages add pages
+    but no score."""
+    if not (os.path.exists(cdx_path) and os.path.exists(ext_path)):
+        return {}
+    c = pd.read_csv(cdx_path, sep="\t", keep_default_na=False, na_values=[""], usecols=["domain", "pages_200"], dtype={"domain": str})
+    c = c[c.pages_200 > 0].sort_values("pages_200", ascending=False, kind="mergesort").reset_index(drop=True)
+    c["rank"] = np.arange(1, len(c) + 1)
+    e = pd.read_csv(ext_path, sep="\t", keep_default_na=False, na_values=[""], usecols=["domain", "scored", "score_mean", "dclm_mean", "edu_mean"], dtype={"domain": str})
+    c = c.merge(e, on="domain", how="left")
+    tot = c.pages_200.sum()
+    m, rows = {}, []
+    for key, label, lo, hi in RANKS:
+        b = c[(c["rank"] >= lo) & (c["rank"] <= hi)]
+        sc = b[b.scored.fillna(0) > 0]
+        w = sc.scored
+        mean = lambda col: round(float((sc[col] * w).sum() / w.sum()), 4) if len(sc) else None
+        share = round(100 * float(b.pages_200.sum()) / tot, 3) if tot else None
+        m[f"domains/rank_{key}_pages_pct"] = share
+        m[f"domains/rank_{key}_score_mean"] = mean("score_mean")
+        rows.append((label, int(len(b)), share, mean("score_mean"), mean("edu_mean"), mean("dclm_mean"), int(w.sum()) if len(sc) else 0))
+    m["domains/score_by_rank"] = cl.table(("domains ranked by pages", "domains", "% of pages", "page score mean", "FineWeb-Edu mean",
+                                           "fastText quality mean", "English scored pages"), rows)
+    return m
+
+
+def build(run_id, prefix, only=None):
     cs = sorted(set(cycles(f"{HOME}/v2cdx/{prefix}-c*.json")) | set(cycles(f"{HOME}/v2text/{prefix}-c*.json")))
     if cs != list(range(1, len(cs) + 1)):
         raise SystemExit(f"{prefix}: cycles {cs} are not 1..N; cumulative keys need every cycle")
@@ -142,10 +174,13 @@ def build(run_id, prefix):
             s = json.load(open(p))
             m.update(cl.text_metrics(scaled(s), Path("/nonexistent"), st, None))
             m.update(domain_tables(f"{HOME}/v2/{prefix}-c{c}/domains.tsv.gz"))
+        m.update(rank_buckets(f"{HOME}/v2cdx/{prefix}-c{c}.domains.tsv.gz", f"{HOME}/v2/{prefix}-c{c}/domains.tsv.gz"))
         k = counts(f"{HOME}/v2/{prefix}-c{c}/counts.tsv")
         if k.get("pairs") and k.get("parse_scored"):
             m["frontier/priority_vs_page_score_spearman"] = k["x_spearman_prio_score_e6"] / 1e6
             m["frontier/priority_vs_page_score_pearson"] = k["x_pearson_prio_score_e6"] / 1e6
+        if only:  # a run that logs the rest to W&B: keep just these keys
+            m = {k: v for k, v in m.items() if any(k.startswith(o) for o in only)}
         rows[c] = m
 
     # a 1-in-10 sample sees fewer rare languages, so the count of languages detected would read low
@@ -169,9 +204,10 @@ def build(run_id, prefix):
             if any(n is not None for n in nums):
                 metrics[key] = nums
     sample = {(json.load(open(f))["parts"], json.load(open(f))["parts_total"]) for f in glob.glob(f"{HOME}/v2text/{prefix}-c*.json")}
-    payload = {"cycles": cs, "metrics": metrics, "histograms": histograms, "tables": tables,
+    payload = {"cycles": cs, "metrics": metrics, "histograms": histograms, "tables": tables, "only": only,
                "text_sample": {"parts": min(sample)[0], "parts_total": min(sample)[1], "same_every_cycle": len(sample) == 1} if sample else None,
-               "source": "Read from the crawl's WARC index and segments (every 10th part for the text keys), not logged by the run"}
+               "source": "Domain-rank charts: read from the crawl's WARC index and parse data, not logged by the run" if only
+               else "Read from the crawl's WARC index and segments (every 10th part for the text keys), not logged by the run"}
     OUT.mkdir(parents=True, exist_ok=True)
     out = OUT / f"extra-{run_id}.js"
     out.write_text(f"window.CRAWL_EXTRA=window.CRAWL_EXTRA||{{}};window.CRAWL_EXTRA[{json.dumps(run_id)}]="
@@ -182,7 +218,10 @@ def build(run_id, prefix):
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    only = None
+    if a[:1] == ["--only"]:
+        only, a = a[1].split(","), a[2:]
     if not a or len(a) % 2:
         raise SystemExit(__doc__)
     for i in range(0, len(a), 2):
-        build(a[i], a[i + 1])
+        build(a[i], a[i + 1], only)

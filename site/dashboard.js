@@ -37,6 +37,28 @@ const KPIS = [
 // Footnote for the charts read from a crawl's quality-<job> run, which export.py folds into the crawl's cycles.
 const QUALITY_SAMPLE = "From the crawl's offline quality sample: 20,000 pages per cycle, DataMan on 5,000 of the English ones.";
 
+// Domains grouped by rank (most HTTP 200 pages first), for the rank charts in Domain diversity; keys from extra.py.
+const RANK_GROUPS = [["top10", "Top 10"], ["11_100", "11–100"], ["101_1k", "101–1,000"], ["1k_10k", "1,001–10,000"], ["rest", "10,001 and below"]];
+// Mean page score over several rank groups, weighted by their English pages, read from the per-cycle rank table.
+function rankScore(rows) {
+  const fn = (d) => d.cycles.map((c) => {
+    const t = (d.tables["domains/score_by_rank"] || {})[c];
+    if (!t) return null;
+    const si = t.columns.indexOf("page score mean"), ni = t.columns.indexOf("English scored pages");
+    let sw = 0, w = 0;
+    for (const r of rows) {
+      const row = t.data[r];
+      if (row && row[si] != null && row[ni]) {
+        sw += row[si] * row[ni];
+        w += row[ni];
+      }
+    }
+    return w ? sw / w : null;
+  });
+  fn.key = "domains/score_by_rank"; // for the card's source note and its expected keys
+  return fn;
+}
+
 const SECTIONS = [
   {
     id: "quality",
@@ -191,6 +213,25 @@ const SECTIONS = [
           { label: "Top 10", per: "domains/top10_share_pct", cum: "domains/top10_share_pct_cumulative" },
           { label: "Top 1", per: "domains/top1_share_pct", cum: "domains/top1_share_pct_cumulative" },
         ],
+      },
+      {
+        type: "bars", title: "Page score by domain rank", table: "domains/score_by_rank", label: "domains ranked by pages", labelHead: "Domains, by rank", allRows: true,
+        sub: "Domains grouped by how many pages they got in the cycle, most first: the mean page score of their English pages",
+        value: "page score mean", unit: "score", valueHead: "Page score", max: 1,
+        extras: [{ col: "% of pages", head: "Pages", unit: "pct" }, { col: "FineWeb-Edu mean", head: "Edu", unit: "score" }, { col: "fastText quality mean", head: "fastText", unit: "score" }],
+      },
+      {
+        type: "line", title: "Page score by domain rank, per cycle", sub: "Mean page score of the English pages on each group of domains", unit: "score",
+        series: [
+          { label: "Top 100", perFn: rankScore([0, 1]) },
+          { label: "101–10,000", perFn: rankScore([2, 3]) },
+          { label: "10,001 and below", perFn: rankScore([4]) },
+        ],
+        compareKeep: ["Top 100", "10,001 and below"], // two lines per run when runs are compared
+      },
+      {
+        type: "stack", title: "Share of pages by domain rank", sub: "% of the cycle's HTTP 200 pages on each group of domains", unit: "pct",
+        series: RANK_GROUPS.map(([k, label]) => ({ label, key: `domains/rank_${k}_pages_pct` })),
       },
       {
         // Counts HTTP 200 records in the WARC index. No line at TOPN_PER_DOMAIN: until 2026-10-22 the fetcher followed
@@ -604,16 +645,17 @@ function buildCompareLine(spec) {
   const series = [];
   const missing = [];
   let mixed = false;
+  const kept = spec.compareKeep ? spec.series.filter((s) => spec.compareKeep.includes(s.label)) : spec.series;
   for (const r of runs) {
     let any = false;
-    spec.series.forEach((s, k) => {
+    kept.forEach((s, k) => {
       const got = withData(r.d, () => pick(s, view));
       if (!got) return;
       any = true;
       if (view === "cum" && !got.cum) mixed = true;
       const at = new Map(r.d.cycles.map((c, i) => [c, got.values[i]]));
       const values = x.map((c) => (at.has(c) ? at.get(c) : null)).map((v) => (s.zeroIsMissing && v === 0 ? null : v));
-      const label = runLabel(r.id) + (spec.series.length > 1 ? ` · ${s.label}` : "") + (view === "cum" && !got.cum ? " (per cycle)" : "");
+      const label = runLabel(r.id) + (kept.length > 1 ? ` · ${s.label}` : "") + (view === "cum" && !got.cum ? " (per cycle)" : "");
       series.push({ label, values, slot: runSlot(r.id), dash: dashes[k % dashes.length] });
     });
     if (!any) missing.push(runLabel(r.id));
@@ -768,7 +810,7 @@ function buildBars(spec) {
   const fmt = F[spec.unit];
   const scope = useCum ? `Cycles ${DATA.cycles[0]}–${state.cycle}` : `Cycle ${state.cycle}`;
   return {
-    sub: [spec.sub, `${scope}, top ${Math.min(limit, rows.length)} of ${rows.length}`].filter(Boolean).join(". "),
+    sub: [spec.sub, spec.allRows ? scope : `${scope}, top ${Math.min(limit, rows.length)} of ${rows.length}`].filter(Boolean).join(". "),
     badge: state.view === "cum" && !useCum ? "per cycle only" : null,
     html: true,
     draw: (host) =>
@@ -929,7 +971,7 @@ function renderHeader() {
     drv.TOPN_PER_HOST && `${drv.TOPN_PER_HOST} per host`,
     drv.NODE_COUNT && `${drv.NODE_COUNT} nodes`,
     `exported ${new Date(DATA.exported_at).toLocaleString()}`,
-    DATA.extraSource && `HTTP, domain, text and score charts: ${DATA.extraSource.charAt(0).toLowerCase() + DATA.extraSource.slice(1)}`,
+    DATA.extraSource && (DATA.extraOnly ? DATA.extraSource : `HTTP, domain, text and score charts: ${DATA.extraSource.charAt(0).toLowerCase() + DATA.extraSource.slice(1)}`),
   ].filter(Boolean);
   for (const t of items) meta.append(html("li", { text: t }));
   if (/^https:\/\//.test(DATA.url || "")) {
@@ -1546,6 +1588,7 @@ function mergeExtra(d, x) {
   }
   d.cycles = cycles;
   d.extraSource = x.source;
+  d.extraOnly = x.only || null;
   d.extraKeySet = new Set(d.extraKeys);
   d.textSample = x.text_sample || null;
 }
@@ -1563,6 +1606,9 @@ function sourceNote(d, keys) {
     return `not logged to W&B; read from ${s.parts} of ${s.parts_total} parts (about 1 in ${Math.round(f)}) of each cycle's pages, with counts scaled up ×${f.toFixed(1)}, and means and shares as in the sample.`;
   }
   if (used.some((k) => k.startsWith("frontier/"))) return "not logged to W&B; read from each cycle's whole fetch list and parse data.";
+  if (used.some((k) => k.startsWith("domains/rank_") || k === "domains/score_by_rank")) {
+    return "not logged to W&B; ranks and page shares from each cycle's whole WARC index, page scores from every parsed page of the domains with 3 or more pages.";
+  }
   return "not logged to W&B; read from each cycle's whole WARC index.";
 }
 const capital = (t) => t.charAt(0).toUpperCase() + t.slice(1);
