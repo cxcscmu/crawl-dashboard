@@ -339,13 +339,16 @@ const Junk = (() => {
       return where.length ? `yes (${where.join(", ")}${sel.t !== 1 ? `, ×${sel.t}` : ""})` : "no";
     };
     const ruleKeys = Object.keys(D.rules);
-    const ruleRows = ruleKeys.map((r) => ({ label: SHORT[r] || D.rules[r], value: G.any.rules[r], muted: !ticked(r), extras: [pct(G.random.rules[r])] }));
+    // The total first, so each rule reads against it: pages failing any ticked rule (the junk share), then each rule alone.
+    const total = { label: "Any ticked rule (junk)", value: V.groups.any.v, extras: [pct(V.groups.random.v)], strong: true };
+    const ruleRows = [total, ...ruleKeys.map((r) => ({ label: SHORT[r] || D.rules[r], value: G.any.rules[r], muted: !ticked(r), extras: [pct(G.random.rules[r])] }))];
     grid.append(card({
-      title: "Which rules the pages fail", sub: "% of high-score pages failing each rule, and of random pages", height: 360,
+      title: "Which rules the pages fail", sub: "% of high-score pages and of random pages failing any ticked rule (top row), then each rule on its own", height: 380,
       draw: (h) => Charts.bars(h, { rows: ruleRows, fmt: F.pct, labelHead: "Rule", valueHead: "High-score pages", extras: ["Random"] }),
       table: () => ({ columns: ["Rule", "Counted", "High-score pages", "Random pages", "fastText top 1%", "FineWeb-Edu top 1%", "Priority top 1%"],
-        rows: ruleKeys.map((r) => [D.rules[r], how(r), pct(G.any.rules[r]), pct(G.random.rules[r]), pct(G.ft_top1.rules[r]), pct(G.edu_top1.rules[r]), pct(G.prio_top1.rules[r])]) }),
-      foot: "Each rule on its own, at DCLM's thresholds; grey bars are rules not ticked. Repeated n-grams here are on the whole text. The table view adds the top-1% groups.",
+        rows: [["Any ticked rule (junk)", "", pct(V.groups.any.v), pct(V.groups.random.v), pct(V.groups.ft_top1.v), pct(V.groups.edu_top1.v), pct(V.groups.prio_top1.v)],
+          ...ruleKeys.map((r) => [D.rules[r], how(r), pct(G.any.rules[r]), pct(G.random.rules[r]), pct(G.ft_top1.rules[r]), pct(G.edu_top1.rules[r]), pct(G.prio_top1.rules[r])])] }),
+      foot: "The top row is the junk share for the ticked rules; a page can fail several rules, so the rows below add up to more. Each rule is at DCLM's thresholds; grey bars are rules not ticked. Repeated n-grams here are on the whole text. The table view adds the top-1% groups.",
     }));
 
     // Repetition at DCLM's threshold and looser.

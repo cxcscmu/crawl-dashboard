@@ -167,7 +167,7 @@ const Raw = (() => {
     const hasPriority = S.spearman_pages != null;
     const series = (f) => R.cycles.map((c) => f(R.summary[c], c) ?? null);
 
-    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + (R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
+    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${ctx.label || R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + (R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
       (R.example_cycles ? ` Example pages for single domains are kept for cycle${R.example_cycles.length > 1 ? "s" : ""} ${R.example_cycles.join(", ")}; the whole-cycle examples are there for every cycle${R.text_chars ? `, all with their first ${F.int(R.text_chars)} characters of text` : ""}.` : "") }));
 
     const tile = (label, v, note) => html("div", { class: "tile" }, html("div", { class: "label", text: label }), html("div", { class: "value", text: v }), html("div", { class: "delta", text: note || "" }));

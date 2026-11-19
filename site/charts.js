@@ -370,7 +370,7 @@ const Charts = (() => {
     );
     for (const r of rows) {
       const value = r.value == null ? "—" : fmt(r.value);
-      const fill = html("span", { class: "hb-fill " + (r.muted ? "c-muted" : "c-s1") });
+      const fill = html("span", { class: "hb-fill " + (r.muted ? "c-muted" : r.strong ? "c-s2" : "c-s1") });
       fill.style.width = along(r.value);
       const track = html("span", { class: "hb-track" }, fill, html("span", { class: "hb-val", text: value }));
       if (ref) {
@@ -385,11 +385,11 @@ const Charts = (() => {
       ];
       if (onSelect) {
         const said = [spec.valueHead + " " + value, ...all.map((e, k) => e + " " + r.extras[k])].join(", ");
-        const row = html("button", { type: "button", class: "hb-row", "aria-label": `${r.label}: ${said}. Show details` }, ...cells);
+        const row = html("button", { type: "button", class: "hb-row" + (r.strong ? " hb-strong" : ""), "aria-label": `${r.label}: ${said}. Show details` }, ...cells);
         row.addEventListener("click", () => onSelect(r.label, row));
         list.append(row);
       } else {
-        list.append(html("div", { class: "hb-row" }, ...cells));
+        list.append(html("div", { class: "hb-row" + (r.strong ? " hb-strong" : "") }, ...cells));
       }
     }
     host.append(list);

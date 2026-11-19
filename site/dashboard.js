@@ -562,12 +562,22 @@ function emptyCard(spec, reason) {
   return { empty: reason || "Not logged in this run.", keys: specKeys(spec), gap: true };
 }
 
-// The run's name ends in its crawl job number, which is what the team calls it.
+// Short names for legends, badges and notes, from what each run does; the run picker keeps the full W&B description.
+// A run not listed here falls back to the start of its W&B name.
+const RUN_NAMES = {
+  "crawl-233150": "Score-ordered",
+  "crawl-237653": "CC-style baseline",
+  "baseline-148132": "Prod fastText",
+  "crawl-259887": "OPIC, CC limits",
+  "crawl-265639": "OPIC, flat 250",
+  "crawl-269821": "TrustRank, flat 250",
+};
 function runLabel(id) {
+  if (RUN_NAMES[id]) return RUN_NAMES[id];
   const r = RUNS.find((x) => x.id === id);
-  const m = r && / crawl (\d+)\s*$/.exec(r.name);
-  return m ? `crawl ${m[1]}` : id;
+  return r ? r.name.replace(/ · crawl \d+\s*$/, "").split(/[:,·]/)[0].trim() : id;
 }
+const runsWith = (has) => RUNS.filter((r) => has(r.id)).map((r) => runLabel(r.id));
 
 // Each run keeps one color (its place in the run list) on every chart, whichever runs are compared.
 const runSlot = (id) => (RUNS.findIndex((r) => r.id === id) % 8) + 1;
@@ -1276,7 +1286,7 @@ function openPanel(title, fill, opener) {
 
 function renderJunk() {
   if (!Junk.has(state.run)) {
-    return html("p", { class: "empty", text: "No page-text sample for this run. The junk check covers crawls 233150, 259887 and 265639, three sampled cycles each." });
+    return html("p", { class: "empty", text: `No page-text sample for this run. The junk check covers ${runsWith(Junk.has).join(", ")}, three sampled cycles each.` });
   }
   // Ticking a rule redraws the section and keeps the choice in the link.
   const rerender = () => {
@@ -1288,9 +1298,9 @@ function renderJunk() {
 
 function renderRaw() {
   if (!Raw.has(state.run)) {
-    return html("p", { class: "empty", text: "This run hasn't been read from the raw crawl data. Crawl 233150 has (cycles 1–9)." });
+    return html("p", { class: "empty", text: `This run hasn't been read from the raw crawl data. These runs have: ${runsWith(Raw.has).join(", ")}.` });
   }
-  return Raw.render({ run: state.run, cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
+  return Raw.render({ run: state.run, label: runLabel(state.run), cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
 }
 
 // ---- Search and domain investigation -------------------------------------------------------------------------------

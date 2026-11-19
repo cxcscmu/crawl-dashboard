@@ -401,3 +401,5 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .junk-t { align-items: center; margin-top: 4px; color: var(--ink-2); cursor: default; }
 .junk-t select { margin-left: auto; padding: 3px 6px; font-size: 12.5px; }
 .kpi-note { margin: 10px 0 0; max-width: 110ch; }
+.hb-strong { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
+.hb-strong .hb-label { font-weight: 600; color: var(--ink); }
