@@ -568,9 +568,9 @@ const RUN_NAMES = {
   "crawl-233150": "Score-ordered",
   "crawl-237653": "CC-style baseline",
   "baseline-148132": "Prod fastText",
-  "crawl-259887": "OPIC, CC limits",
-  "crawl-265639": "OPIC, flat 250",
-  "crawl-269821": "TrustRank, flat 250",
+  "crawl-259887": "OPIC with CC limits",
+  "crawl-265639": "OPIC with flat 250",
+  "crawl-269821": "TrustRank with flat 250",
 };
 function runLabel(id) {
   if (RUN_NAMES[id]) return RUN_NAMES[id];
@@ -1286,7 +1286,7 @@ function openPanel(title, fill, opener) {
 
 function renderJunk() {
   if (!Junk.has(state.run)) {
-    return html("p", { class: "empty", text: `No page-text sample for this run. The junk check covers ${runsWith(Junk.has).join(", ")}, three sampled cycles each.` });
+    return html("p", { class: "empty", text: `No page-text sample for this run. The junk check covers ${runsWith(Junk.has).join("; ")}, three sampled cycles each.` });
   }
   // Ticking a rule redraws the section and keeps the choice in the link.
   const rerender = () => {
@@ -1296,9 +1296,12 @@ function renderJunk() {
   return Junk.render({ run: state.run, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
 }
 
+let rawProbe = null; // the other runs' raw-data indexes, loaded once to say which runs have the section
 function renderRaw() {
   if (!Raw.has(state.run)) {
-    return html("p", { class: "empty", text: `This run hasn't been read from the raw crawl data. These runs have: ${runsWith(Raw.has).join(", ")}.` });
+    if (!rawProbe) rawProbe = Promise.all(RUNS.map((r) => Raw.loadIndex(r.id))).then(() => state.tab === "raw" && renderSections());
+    const list = runsWith(Raw.has);
+    return html("p", { class: "empty", text: "This run hasn't been read from the raw crawl data." + (list.length ? ` These runs have: ${list.join("; ")}.` : "") });
   }
   return Raw.render({ run: state.run, label: runLabel(state.run), cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
 }
