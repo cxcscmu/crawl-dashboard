@@ -39,6 +39,13 @@
           <button type="button" data-view="per" aria-pressed="true">Per cycle</button><button type="button" data-view="cum" aria-pressed="false">Cumulative</button>
         </div>
       </div>
+      <details class="field compare">
+        <summary><span>Compare</span> <b id="f-compare-label">off</b></summary>
+        <div class="compare-pop">
+          <p class="foot">Overlay other runs on the line charts, one color per run.</p>
+          <div id="f-compare-list"></div>
+        </div>
+      </details>
 
     </div>
   </div>
@@ -66,6 +73,7 @@
   <script src="charts.js"></script>
   <script src="domain-metrics.js"></script>
   <script src="raw.js"></script>
+  <script src="junk.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

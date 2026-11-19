@@ -3,3 +3,6 @@
 crawl-233150      # FineWeb-Edu + fastText page score, cycles 1-9 (crawl 233150)
 crawl-237653      # Common Crawl-style baseline (crawl 239994; the W&B id kept the number of the crawl's first job)
 baseline-148132   # prod chain, cycles 1-9 (crawl 148132)
+crawl-259887      # OPIC, Common Crawl per-site limits, quality-weighted cash (crawl 265307 chain); text/HTTP/domain keys from extra.py
+crawl-265639      # OPIC, flat 250 per site, quality-weighted cash; text/HTTP/domain keys from extra.py
+crawl-269821      # OPIC, flat 250 per site, TrustRank-style cash, no page scores; text/HTTP/domain keys from extra.py

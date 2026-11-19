@@ -4,3 +4,6 @@ __pycache__/
 .DS_Store
 # Built by export.py; the published page gets them from the GitHub Action
 site/data/
+
+# Claude Code personal settings
+.claude/settings.local.json

@@ -315,6 +315,15 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .run-details summary { cursor: pointer; padding: 8px 0; white-space: nowrap; }
 .run-details-content { position: absolute; z-index: 25; right: 0; top: calc(100% + 12px); width: min(520px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
 .run-details-content .run-name { color: var(--ink); font-weight: 600; margin: 0 0 14px; }
+.compare { position: relative; }
+.compare summary { cursor: pointer; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); white-space: nowrap; list-style: none; }
+.compare summary::-webkit-details-marker { display: none; }
+.compare summary b { color: var(--ink); font-weight: 600; }
+.compare-pop { position: absolute; z-index: 25; left: 0; top: calc(100% + 8px); width: min(520px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
+.compare-pop .foot { margin: 0 0 8px; }
+.compare-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; color: var(--ink); cursor: pointer; line-height: 1.35; }
+.compare-item input { margin-top: 2px; flex: none; }
+.compare-item .swatch { flex: none; width: 12px; height: 12px; margin-top: 3px; border-radius: 3px; }
 .meta { gap: 8px 16px; }
 .cycle-summary { border-bottom: 1px solid var(--border); }
 .cycle-summary[open] { padding-bottom: 18px; }
@@ -376,3 +385,10 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .page-examples details > summary { cursor: pointer; color: var(--link); font-size: 12.5px; margin-top: 6px; }
 .page-text { max-height: 360px; overflow: auto; margin: 8px 0 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--page); color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .example-title { font-weight: 600; margin-bottom: 2px; }
+
+/* Junk check */
+.junk-rules { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 6px; font-size: 13px; color: var(--ink-2); }
+.junk-ex th, .junk-ex td { vertical-align: top; }
+.junk-ex td:first-child, .junk-ex th:first-child { text-align: left; white-space: normal; min-width: 130px; }
+.junk-ex .junk-url, .junk-ex th.junk-url { text-align: left; white-space: normal; min-width: 240px; max-width: 420px; overflow-wrap: anywhere; }
+.junk-ex .junk-url .sub { margin-top: 2px; }

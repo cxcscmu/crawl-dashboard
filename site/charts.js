@@ -226,7 +226,7 @@ const Charts = (() => {
         x: spec.x,
         y: s.values,
         connectgaps: false,
-        line: { color: c, width: 2 },
+        line: { color: c, width: 2, dash: s.dash || "solid" },
         marker: { color: c, size: dotSizes(s.values), line: { color: p.surface, width: 2 } },
         customdata: s.values.map(fmt),
         hovertemplate: `%{customdata}  ${s.label}<extra></extra>`,

@@ -151,6 +151,12 @@ const SECTIONS = [
     ],
   },
   {
+    id: "junk",
+    title: "Junk check",
+    blurb: "Read straight from page text sampled on the cluster, not from W&B: how much of the crawled text is junk by DCLM-Baseline's rules plus two of ours, and how that changes with the fastText, FineWeb-Edu and page scores and with priority.",
+    charts: [],
+  },
+  {
     id: "explorer",
     title: "Domain explorer",
     blurb: "Inspect individual sites, investigate download failures, and compare link contributions and priority accuracy.",
@@ -443,8 +449,9 @@ const SECTIONS = [
 // ---- State and data access ------------------------------------------------------------------------------------------
 
 const RUNS = window.CRAWL_RUNS || [];
-const state = { run: null, view: "per", cycle: null, tab: SECTIONS[0].id };
+const state = { run: null, view: "per", cycle: null, tab: SECTIONS[0].id, compare: [] };
 let DATA = null;
+const LOADED = new Map(); // run id -> its data (W&B plus extra-<id>.js), for the compared runs
 let LATEST = null; // the newest cycle with full metrics; see latestCompleteCycle
 let DOMAINS = new Map();
 let allQuery = "";
@@ -555,7 +562,70 @@ function emptyCard(spec, reason) {
   return { empty: reason || "Not logged in this run.", keys: specKeys(spec), gap: true };
 }
 
+// The run's name ends in its crawl job number, which is what the team calls it.
+function runLabel(id) {
+  const r = RUNS.find((x) => x.id === id);
+  const m = r && / crawl (\d+)\s*$/.exec(r.name);
+  return m ? `crawl ${m[1]}` : id;
+}
+
+// Each run keeps one color (its place in the run list) on every chart, whichever runs are compared.
+const runSlot = (id) => (RUNS.findIndex((r) => r.id === id) % 8) + 1;
+
+function withData(d, fn) {
+  const keep = DATA;
+  DATA = d;
+  try {
+    return fn();
+  } finally {
+    DATA = keep;
+  }
+}
+
+const comparedRuns = () => state.compare.filter((id) => id !== state.run && LOADED.has(id));
+
+// Compare mode: the open run and the compared ones on one chart, one color per run; a chart with several series
+// (mean and median, say) tells them apart by dash. Cycles are the union of the runs' cycles.
+function buildCompareLine(spec) {
+  const runs = [state.run, ...comparedRuns()].map((id) => ({ id, d: id === state.run ? DATA : LOADED.get(id) }));
+  const view = state.view;
+  const x = [...new Set(runs.flatMap((r) => r.d.cycles))].sort((a, b) => a - b);
+  const dashes = ["solid", "dot", "dash", "dashdot"];
+  const series = [];
+  const missing = [];
+  let mixed = false;
+  for (const r of runs) {
+    let any = false;
+    spec.series.forEach((s, k) => {
+      const got = withData(r.d, () => pick(s, view));
+      if (!got) return;
+      any = true;
+      if (view === "cum" && !got.cum) mixed = true;
+      const at = new Map(r.d.cycles.map((c, i) => [c, got.values[i]]));
+      const values = x.map((c) => (at.has(c) ? at.get(c) : null)).map((v) => (s.zeroIsMissing && v === 0 ? null : v));
+      const label = runLabel(r.id) + (spec.series.length > 1 ? ` · ${s.label}` : "") + (view === "cum" && !got.cum ? " (per cycle)" : "");
+      series.push({ label, values, slot: runSlot(r.id), dash: dashes[k % dashes.length] });
+    });
+    if (!any) missing.push(runLabel(r.id));
+  }
+  if (!series.length) return emptyCard(spec);
+  const fmt = F[spec.unit];
+  const tf = tableFmt(spec.unit);
+  const height = (spec.height || 210) + 24 + (series.length > 4 ? 24 : 0);
+  return {
+    badge: mixed ? "some runs per cycle only" : null,
+    height,
+    foot: [missing.length ? `Not logged for ${missing.join(", ")}.` : "", spec.foot || ""].filter(Boolean).join(" "),
+    draw: (host) => Charts.line(host, { name: spec.title, x, series, unit: spec.unit, fmt, zero: spec.zero, height, legend: true }),
+    table: {
+      columns: ["Cycle", ...series.map((s) => s.label)],
+      rows: x.map((c, i) => [String(c), ...series.map((s) => cell(s.values[i], tf))]),
+    },
+  };
+}
+
 function buildLine(spec) {
+  if (comparedRuns().length && !spec.x) return buildCompareLine(spec);
   const view = chartView(spec);
   const series = [];
   const missing = [];
@@ -786,6 +856,8 @@ function drawInto(host) {
 function renderCard(spec, gaps) {
   const built = BUILDERS[spec.type](spec);
   if (built.gap) gaps.add(spec.gap || spec.title);
+  // Only line charts overlay the compared runs; the others stay on the open run, and say so.
+  if (comparedRuns().length && !built.empty && !built.note && (spec.type !== "line" || spec.x)) built.badge = `${runLabel(state.run)} only`;
   const fig = html("figure", { class: "card" + (built.empty || built.note ? " quiet" : "") });
   const h3 = html("h3", { text: spec.title }, built.badge && html("span", { class: "badge", text: built.badge }));
   const titles = html("div", {}, h3, (built.sub || spec.sub) && html("p", { class: "sub", text: built.sub || spec.sub }));
@@ -836,6 +908,7 @@ function renderHeader() {
     drv.TOPN_PER_HOST && `${drv.TOPN_PER_HOST} per host`,
     drv.NODE_COUNT && `${drv.NODE_COUNT} nodes`,
     `exported ${new Date(DATA.exported_at).toLocaleString()}`,
+    DATA.extraSource && `HTTP, domain, text and score charts: ${DATA.extraSource.charAt(0).toLowerCase() + DATA.extraSource.slice(1)}`,
   ].filter(Boolean);
   for (const t of items) meta.append(html("li", { text: t }));
   if (/^https:\/\//.test(DATA.url || "")) {
@@ -858,6 +931,36 @@ function renderFilters() {
     cycleSel.append(html("option", { value: c, selected: c === state.cycle, text: c === LATEST ? `${c} (latest)` : String(c) }));
   }
   for (const b of document.querySelectorAll("[data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === state.view));
+  const list = document.getElementById("f-compare-list");
+  list.textContent = "";
+  for (const r of RUNS) {
+    if (r.id === state.run) continue;
+    const box = html("input", { type: "checkbox", value: r.id });
+    box.checked = state.compare.includes(r.id);
+    box.addEventListener("change", () => {
+      state.compare = box.checked ? [...state.compare, r.id] : state.compare.filter((id) => id !== r.id);
+      loadCompared();
+    });
+    const swatch = html("span", { class: "swatch" });
+    swatch.style.background = `var(--s${runSlot(r.id)})`;
+    list.append(html("label", { class: "compare-item" }, box, swatch, html("span", { text: r.name })));
+  }
+  const n = comparedRuns().length;
+  document.getElementById("f-compare-label").textContent = n ? `${n} run${n > 1 ? "s" : ""}` : "off";
+}
+
+async function loadCompared() {
+  document.body.classList.add("loading");
+  try {
+    for (const id of state.compare) {
+      if (!LOADED.has(id)) LOADED.set(id, await loadRun(RUNS.find((r) => r.id === id)));
+    }
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    document.body.classList.remove("loading");
+  }
+  render();
 }
 
 function renderKpis() {
@@ -915,6 +1018,7 @@ function sectionStatus() {
   }
   if (DomainMetrics.domains(DATA, state.cycle).length) hasData.add("explorer");
   if (Raw.has(state.run)) hasData.add("raw");
+  if (Junk.has(state.run)) hasData.add("junk");
   return { gaps, hasData };
 }
 
@@ -934,7 +1038,7 @@ function renderSections() {
         html("h2", { id: sec.id + "-h", text: sec.title }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
         sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && html("p", { class: "blurb", text: sec.cacheNote }),
-        sec.id === "explorer" ? renderExplorer() : sec.id === "raw" ? renderRaw() : renderSectionFigures(sec)
+        sec.id === "explorer" ? renderExplorer() : sec.id === "raw" ? renderRaw() : sec.id === "junk" ? renderJunk() : renderSectionFigures(sec)
       )
     );
   } else {
@@ -991,7 +1095,7 @@ function renderGaps(gaps) {
 }
 
 const NAV_GROUPS = [
-  { label: "Content", ids: ["quality", "language", "usability"] },
+  { label: "Content", ids: ["quality", "language", "usability", "junk"] },
   { label: "Domains", ids: ["explorer", "raw", "domains", "priority"] },
   { label: "Crawl operations", ids: ["fetch", "cache", "speed", "storage"] },
   { label: "Reference", ids: ["downstream", "all"] },
@@ -1145,6 +1249,13 @@ function openPanel(title, fill, opener) {
   };
   close.addEventListener("click", () => closeDrawer());
   document.addEventListener("keydown", onKey);
+}
+
+function renderJunk() {
+  if (!Junk.has(state.run)) {
+    return html("p", { class: "empty", text: "No page-text sample for this run. The junk check covers crawls 233150, 259887 and 265639, three sampled cycles each." });
+  }
+  return Junk.render({ run: state.run, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
 }
 
 function renderRaw() {
@@ -1359,16 +1470,65 @@ const safely = (fn) => (...args) => {
   }
 };
 
-function loadRun(entry) {
-  const ready = () => window.CRAWL_DATA && window.CRAWL_DATA[entry.id];
-  if (ready()) return Promise.resolve(ready());
+function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = entry.file;
-    s.onload = () => (ready() ? resolve(ready()) : reject(new Error(`${entry.file} loaded but held no data for ${entry.id}.`)));
-    s.onerror = () => reject(new Error(`Couldn't load ${entry.file}. Run "python export.py ${entry.id}" to create it.`));
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = reject;
     document.head.append(s);
   });
+}
+
+// Keys a run doesn't log to W&B, read from the crawl data by extra.py (data/raw/extra-<id>.js, optional). W&B values
+// always win: only keys the run lacks are added, and cycles W&B doesn't have yet are appended.
+function mergeExtra(d, x) {
+  const cycles = [...new Set([...d.cycles, ...x.cycles])].sort((a, b) => a - b);
+  const remap = (values, from) => {
+    const at = new Map(from.map((c, i) => [c, values[i]]));
+    return cycles.map((c) => (at.has(c) ? at.get(c) : null));
+  };
+  d.extraKeys = [];
+  for (const part of ["metrics", "histograms"]) {
+    for (const k of Object.keys(d[part])) d[part][k] = remap(d[part][k], d.cycles);
+    for (const [k, v] of Object.entries(x[part] || {})) {
+      if (k in d[part]) continue;
+      d[part][k] = remap(v, x.cycles);
+      d.extraKeys.push(k);
+    }
+  }
+  for (const [k, v] of Object.entries(x.tables || {})) {
+    if (!(k in d.tables)) {
+      d.tables[k] = v;
+      d.extraKeys.push(k);
+    }
+  }
+  d.cycles = cycles;
+  d.extraSource = x.source;
+}
+
+async function loadRun(entry) {
+  const ready = () => window.CRAWL_DATA && window.CRAWL_DATA[entry.id];
+  if (!ready()) {
+    try {
+      await loadScript(entry.file);
+    } catch {
+      throw new Error(`Couldn't load ${entry.file}. Run "python export.py ${entry.id}" to create it.`);
+    }
+    if (!ready()) throw new Error(`${entry.file} loaded but held no data for ${entry.id}.`);
+  }
+  const d = ready();
+  if (!d.extraChecked) {
+    d.extraChecked = true;
+    try {
+      await loadScript(`data/raw/extra-${entry.id}.js`);
+    } catch {
+      // Most runs log everything to W&B and have no extra file.
+    }
+    const x = (window.CRAWL_EXTRA || {})[entry.id];
+    if (x) mergeExtra(d, x);
+  }
+  return d;
 }
 
 function syncUrl() {
@@ -1377,6 +1537,8 @@ function syncUrl() {
   if (state.view === "cum") p.set("view", "cum");
   if (state.cycle !== LATEST) p.set("cycle", state.cycle);
   if (state.tab !== TABS[0].id) p.set("tab", state.tab);
+  const cmp = comparedRuns();
+  if (cmp.length) p.set("compare", cmp.join(","));
   try {
     history.replaceState(null, "", "?" + p);
   } catch {
@@ -1400,7 +1562,10 @@ async function switchRun() {
   document.body.classList.add("loading"); // keep the old render, dimmed, until the new run is in
   try {
     DATA = await loadRun(entry);
+    LOADED.set(entry.id, DATA);
+    for (const id of state.compare) if (!LOADED.has(id)) LOADED.set(id, await loadRun(RUNS.find((r) => r.id === id)));
     await Raw.loadIndex(entry.id); // optional: only runs read from the raw crawl data have it
+    await Junk.load(); // optional, one file for every run that has a page-text sample
   } catch (err) {
     showError(err.message);
     return;
@@ -1464,6 +1629,7 @@ function main() {
   document.addEventListener("pointerdown", (e) => {
     if (!e.target.closest(".figure-finder")) document.getElementById("figure-results").hidden = true;
     if (!e.target.closest(".run-details")) document.querySelector(".run-details").open = false;
+    if (!e.target.closest(".compare")) document.querySelector(".compare").open = false;
   });
   document.addEventListener("keydown", (e) => {
     const details = document.querySelector(".run-details");
@@ -1494,6 +1660,7 @@ function main() {
   state.cycle = parseInt(p.get("cycle"), 10);
   const wanted = p.get("tab") || location.hash.slice(1); // links from before the tabs pointed at #<section>
   if (TABS.some((t) => t.id === wanted)) state.tab = wanted;
+  state.compare = (p.get("compare") || "").split(",").filter((id) => id && id !== state.run && RUNS.some((r) => r.id === id));
 
   // Arrow keys, Home and End move between tabs, as in any tab list.
   document.getElementById("tabs").addEventListener("keydown", (e) => {

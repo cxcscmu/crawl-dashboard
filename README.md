@@ -45,9 +45,37 @@ gh release upload raw-data raw-data.tar.gz --clobber      # first time: gh relea
 
 A published GitHub Pages site can be at most 1 GB, so keep `site/data/raw` well under that.
 
+## Keys a run doesn't log (optional)
+
+Crawls 259887, 265639 and 269821 log only the wall-clock keys (`wall/*`) to W&B. `extra.py` fills in their HTTP, domain, language, page-length and score keys from our own read of the crawl (the cluster jobs `run_cdx.sbatch` and `run_text.sbatch`, kept with the extracts in `~/crawl-data`). It calls the same functions of Jerry's `crawl_logger.py` that make the W&B keys, so the charts read them unchanged:
+
+```bash
+~/crawl-data/py/bin/python extra.py crawl-259887 259887 crawl-265639 265639 crawl-269821 269821
+```
+
+Each run gets `site/data/raw/extra-<run>.js`, which ships in the same raw-data release as above. The page adds only keys W&B doesn't have, so a backfilled W&B run takes over by itself. The text keys come from every 10th part of each cycle's segment; their counts are scaled up, and the means and shares are the sample's own. Checked against crawl 233150, which logs everything: domains and HTTP shares match exactly, and score means are within about 1%.
+
+## Junk check (optional)
+
+The **Junk check** section shows how much of the crawled text is junk and how that changes with the fastText, FineWeb-Edu and page scores and with priority. It reads page text sampled on the cluster from three cycles each of crawls 233150, 259887 and 265639: every high-score page (combined ≥ 0.95, fastText ≥ 0.5 or FineWeb-Edu ≥ 0.6) and 1 in 10 of the rest, from every 10th part of a cycle's segment. Rates are weighted by how pages were sampled.
+
+The rules are DCLM-Baseline's (`dclm_baseline_refinedweb_post_lang.yaml`, ported from mlfoundations/dclm) plus two of ours, in `junk/`:
+
+```bash
+cd junk
+~/crawl-data/py/bin/python junk.py         # every rule for every sampled page -> ~/crawl-data/analysis/junk/pages.pkl
+~/crawl-data/py/bin/python junk_ngram.py   # the n-gram check for pages stopped at a duplicate-line check
+~/crawl-data/py/bin/python junk_rep.py     # each page's repetition level, whole text and 6+ word lines
+cd .. && ~/crawl-data/py/bin/python junkdata.py   # -> site/data/raw/junk.js
+```
+
+`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). The page's toggle switches between three junk definitions: the page rules alone; the page rules plus repeated n-grams on lines of 6+ words; and every DCLM rule as written. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
+
 ## View it
 
 The data files aren't in the repo, so export at least one run first. Then open `site/index.html` in a browser. Double-clicking works: the data loads as script files, so no local server is needed. To serve it instead, run `python3 -m http.server -d site 8000`. The charts use Plotly, which the page loads from cdn.jsdelivr.net, so the browser needs an internet connection.
+
+**Compare** in the filter bar overlays other runs on the line charts, one color per run (the chart's own series, such as mean and median, are told apart by dash). Other chart types stay on the open run and say so. The selection is kept in the URL (`?compare=crawl-259887,crawl-265639`).
 
 In each chart, hovering lists every series at that cycle. Click a legend entry to hide that series, or double-click it to show only that series. The menu in a chart's top-right corner has zoom, pan, reset and PNG download.
 
