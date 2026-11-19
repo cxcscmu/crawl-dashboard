@@ -79,7 +79,7 @@ cd junk
 cd .. && ~/crawl-data/py/bin/python junkdata.py   # -> site/data/raw/junk.js
 ```
 
-`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). Readers tick which rules count as junk, with a looser threshold for the n-gram rule if they like; three presets set the page rules alone, the page rules plus repeated n-grams on lines of 6+ words, and every DCLM rule as written. Every rate is recomputed in the browser from `site/data/raw/junk/<run>.js` (one entry per sampled page, about 1.3 MB per crawl, loaded when the tab opens); without that file the presets still work from `junk.js`. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
+`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). Readers tick which rules count as junk, with a looser threshold for the n-gram rule if they like, and an extra rule for pages under 10 words that no preset uses; three presets set the page rules alone, the page rules plus repeated n-grams on lines of 6+ words, and every DCLM rule as written. Every rate is recomputed in the browser from `site/data/raw/junk/<run>.js` (one entry per sampled page, about 1.3 MB per crawl, loaded when the tab opens); without that file the presets still work from `junk.js`. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
 
 ## View it
 

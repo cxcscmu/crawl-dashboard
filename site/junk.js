@@ -65,7 +65,7 @@ const Junk = (() => {
   };
   const SETS = [
     { title: "DCLM page rules", items: ["length", "word_length", "symbols", "bullets", "ellipsis", "non_alpha_words", "stop_words"] },
-    { title: "Our rules", items: ["low_vocab", "repeated_term"] },
+    { title: "Our rules", items: ["low_vocab", "repeated_term", "under10"] },
     { title: "DCLM repetition and line rules", items: ["ngram", "ngram6", "rep_lines", "line_removal"] },
   ];
   const ITEMS = SETS.flatMap((s) => s.items);
@@ -186,7 +186,7 @@ const Junk = (() => {
     length: "Under 50 / over 100k words", word_length: "Word length outside 3–10", symbols: "Too many # or ellipses",
     bullets: "90%+ of lines are bullets", ellipsis: "30%+ lines end in ellipsis", non_alpha_words: "20%+ words without a letter",
     stop_words: "Under 2 stop words", rep_ngram: "Repeated n-grams", rep_lines: "Repeated lines", line_removal: "Line cleanup takes 5%+",
-    low_vocab: "Under 30% distinct words", repeated_term: "One term is 5%+ of words",
+    low_vocab: "Under 30% distinct words", repeated_term: "One term is 5%+ of words", under10: "Under 10 words",
   };
   const BAND_CHARTS = [
     { key: "fasttext", title: "Junk share by fastText percentile", x: "fastText percentile (Jerry's ClueWeb22 table)",

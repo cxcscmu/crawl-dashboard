@@ -27,11 +27,13 @@ RUN_ID = {"233150": "crawl-233150", "259887": "crawl-259887", "265639": "crawl-2
 BASIC = ["length", "word_length", "symbols", "bullets", "ellipsis", "non_alpha_words", "stop_words"]
 OURS = ["low_vocab", "repeated_term"]
 LINE_CHECKS = {"dup_lines", "dup_paras", "dup_line_chars", "dup_para_chars"}
-RULES = BASIC + ["rep_ngram", "rep_lines", "line_removal"] + OURS
+EXTRA = ["under10"]  # optional rules readers can tick; in no preset, so the presets' numbers don't change
+RULES = BASIC + ["rep_ngram", "rep_lines", "line_removal"] + OURS + EXTRA
 LABEL = {"length": "Under 50 or over 100k words", "word_length": "Mean word length outside 3–10", "symbols": "Too many # or ellipses",
          "bullets": "90%+ of lines are bullets", "ellipsis": "30%+ of lines end in an ellipsis", "non_alpha_words": "20%+ of words have no letter",
          "stop_words": "Fewer than 2 stop words", "rep_ngram": "Repeated n-grams (whole text)", "rep_lines": "Repeated lines or paragraphs",
-         "line_removal": "Line cleanup removes 5%+ of words", "low_vocab": "Under 30% distinct words", "repeated_term": "One term is 5%+ of words"}
+         "line_removal": "Line cleanup removes 5%+ of words", "low_vocab": "Under 30% distinct words", "repeated_term": "One term is 5%+ of words",
+         "under10": "Under 10 words"}
 INDICATORS = {
     "page": "DCLM's page rules (length, word length, symbols, bullets, ellipses, letterless words, stop words) and our two (low vocabulary, one repeated term)",
     "prose": "The page rules, plus DCLM's repeated n-gram check run on lines of 6+ words only (menus and buttons left out)",
@@ -66,6 +68,7 @@ def load():
     first = df.repetition_check.fillna("")
     df["rep_lines"] = first.isin(LINE_CHECKS)
     df["rep_ngram"] = first.str.contains("gram") | (df.ngram_check.fillna("") != "")
+    df["under10"] = df.words.fillna(0) < 10  # the whole page's words, split on whitespace (not cut at 30,000 characters)
     df["junk_page"] = df[BASIC + OURS].any(axis=1)
     df["junk_prose"] = df.junk_page | (df.rep_prose > 1)
     df["junk_dclm"] = df[BASIC + ["rep_lines", "rep_ngram", "line_removal"] + OURS].any(axis=1)
@@ -131,8 +134,8 @@ FNAME = {"233150": "233150 · score-ordered", "259887": "259887 · OPIC, Common 
 def findings_csvs(df, out):
     """The tables of the findings page (analysis/findings in ~/crawl-data), from the same pages and weights."""
     groups, pct, rules, rep = [], [], [], []
-    order = BASIC + OURS + ["rep_ngram", "rep_lines", "line_removal"]  # the counted rules first, the three left out last
-    rows_rules = {r: {"rule": r, "label": LABEL[r], "kind": "ours" if r in OURS else "DCLM", "in_content": r in BASIC + OURS} for r in order}
+    order = BASIC + OURS + ["rep_ngram", "rep_lines", "line_removal"] + EXTRA  # counted rules first, then the ones left out
+    rows_rules = {r: {"rule": r, "label": LABEL[r], "kind": "ours" if r in OURS + EXTRA else "DCLM", "in_content": r in BASIC + OURS} for r in order}
     for run, g in df.groupby("run"):
         k, name = FKEY[run], FNAME[run]
         b, h = g[g.base].assign(w=1.0), g[g.high]
@@ -168,7 +171,7 @@ def findings_csvs(df, out):
 
 
 # Per-page file for choosing rules on the page: the browser recomputes every rate for any set of rules.
-PAGE_RULES = BASIC + OURS + ["rep_lines", "line_removal"]  # bit i of each page's mask = failed PAGE_RULES[i]
+PAGE_RULES = BASIC + OURS + ["rep_lines", "line_removal"] + EXTRA  # bit i of each page's mask = failed PAGE_RULES[i]
 SCORE_KEYS = [("fasttext", "F_dclm"), ("edu", "F_edu"), ("combined", "combined"), ("priority", "prio_pct")]
 
 
