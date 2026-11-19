@@ -36,7 +36,7 @@ The **Raw data check** section doesn't come from W&B. It shows numbers read stra
 
 This writes `site/data/raw/crawl-233150.js` plus one folder of domain tables and example pages. A run without these files simply has an empty Raw data check tab.
 
-A long crawl would not fit the site's 1 GB at full size (233150's 9 cycles take 475 MB), so the three newer crawls are built trimmed: every cycle's summary, domain tables cut to the 3,000 domains with the most pages, and example pages for three cycles only, with their first 1,500 characters. Their per-URL files aren't downloaded, so the repeat-record and bot-page counts are left out. The notes on priority and on the per-domain fetch-list limit follow each crawl:
+A long crawl would not fit the site's 1 GB at full size (233150's 9 cycles take 475 MB), so the three newer crawls are built trimmed: every cycle's summary, domain tables cut to the 3,000 domains with the most pages, the whole-cycle example pages in every cycle, and the per-domain example pages for three cycles only, all with their first 1,500 characters. Their per-URL files aren't downloaded, so the repeat-record and bot-page counts are left out. The notes on priority and on the per-domain fetch-list limit follow each crawl:
 
 ```bash
 OPIC="its OPIC cash, which the pages linking to it pass on, weighted by their page score"

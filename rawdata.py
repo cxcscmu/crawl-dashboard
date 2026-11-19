@@ -119,7 +119,8 @@ def cause(r):
 def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True):
     """max_domains keeps only that many domains (most HTTP 200s first, plus every example domain) in the cycle's domain
     table; the cycle's own numbers still use every domain. text_chars cuts example texts (chars keeps the full length).
-    Without examples the cycle gets an empty example list."""
+    Without examples the cycle keeps only its whole-cycle example pages (the few dozen picked over every domain), not
+    the per-domain ones."""
     d = pd.read_csv(f"{folder}/domains.tsv.gz", sep="\t", keep_default_na=False, na_values=[""])
     d["domain"] = d.domain.fillna("").astype(str)
     counts = pd.read_csv(f"{folder}/counts.tsv", sep="\t", header=None, index_col=0)[1]
@@ -129,17 +130,20 @@ def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with
     examples = {}
     whole = []
     with gzip.open(f"{folder}/examples.jsonl.gz", "rt") as f:
-        for line in f if with_examples else []:
+        for line in f:
             e = json.loads(line)
             if text_chars and e.get("text") and len(e["text"]) > text_chars:
                 e["text"] = e["text"][:text_chars]
             groups = e.pop("buckets").split(",")
             e["groups"] = groups
+            # A page can be picked for its domain and for the whole cycle: each list keeps only its own groups, or a
+            # random whole-cycle pick that was also its domain's top-scored page would show as one of the cycle's top.
             own = [g for g in groups if not g.startswith("global_")]
-            if own:
-                examples.setdefault(e["target"], []).append(e)
-            if len(own) < len(groups):
-                whole.append(e)
+            glob_ = [g for g in groups if g.startswith("global_")]
+            if own and with_examples:
+                examples.setdefault(e["target"], []).append({**e, "groups": own})
+            if glob_:
+                whole.append({**e, "groups": glob_})
     for dom, rows in examples.items():
         js(f"{out}/{run}/ex-c{cycle}/{safe_name(dom)}.js", "CRAWL_RAW_EX", f"{run}/{cycle}/{dom}", rows)
     js(f"{out}/{run}/ex-c{cycle}/_cycle.js", "CRAWL_RAW_EX", f"{run}/{cycle}/", whole)
@@ -227,7 +231,7 @@ def main():
     if a.max_domains:
         index["domain_rows"] = f"Domain rows cover the {a.max_domains:,} domains with the most pages in the cycle (of those with 3 or more), plus every domain with example pages."
     if a.example_cycles:
-        index["example_cycles"] = [c for c in ex_cycles if c in cycles]
+        index["example_cycles"] = [c for c in ex_cycles if c in cycles]  # per-domain examples; whole-cycle ones in every cycle
     if a.text_chars:
         index["text_chars"] = a.text_chars
     for k in ("priority_def", "list_limit", "seed_note"):
