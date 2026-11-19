@@ -168,7 +168,9 @@ def build(run_id, prefix):
                     (round(float(v), 6) if isinstance(v, (float, np.floating)) else int(v)) for v in vals]
             if any(n is not None for n in nums):
                 metrics[key] = nums
+    sample = {(json.load(open(f))["parts"], json.load(open(f))["parts_total"]) for f in glob.glob(f"{HOME}/v2text/{prefix}-c*.json")}
     payload = {"cycles": cs, "metrics": metrics, "histograms": histograms, "tables": tables,
+               "text_sample": {"parts": min(sample)[0], "parts_total": min(sample)[1], "same_every_cycle": len(sample) == 1} if sample else None,
                "source": "Read from the crawl's WARC index and segments (every 10th part for the text keys), not logged by the run"}
     OUT.mkdir(parents=True, exist_ok=True)
     out = OUT / f"extra-{run_id}.js"

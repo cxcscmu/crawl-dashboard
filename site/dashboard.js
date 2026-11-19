@@ -856,6 +856,17 @@ function drawInto(host) {
 function renderCard(spec, gaps) {
   const built = BUILDERS[spec.type](spec);
   if (built.gap) gaps.add(spec.gap || spec.title);
+  if (!built.empty && !built.note) {
+    // Say where the numbers come from when a run doesn't log them (each compared run on a line chart, too).
+    const shown = spec.type === "line" && !spec.x ? [state.run, ...comparedRuns()] : [state.run];
+    const notes = new Map();
+    for (const id of shown) {
+      const n = sourceNote(id === state.run ? DATA : LOADED.get(id), specKeys(spec));
+      if (n) notes.set(n, [...(notes.get(n) || []), runLabel(id)]);
+    }
+    const src = [...notes].map(([n, who]) => (shown.length > 1 ? `${who.join(", ")}: ${n}` : capital(n))).join(" ");
+    if (src) built.foot = [built.foot, src].filter(Boolean).join(" ");
+  }
   // Only line charts overlay the compared runs; the others stay on the open run, and say so.
   if (comparedRuns().length && !built.empty && !built.note && (spec.type !== "line" || spec.x)) built.badge = `${runLabel(state.run)} only`;
   const fig = html("figure", { class: "card" + (built.empty || built.note ? " quiet" : "") });
@@ -971,6 +982,7 @@ function renderKpis() {
     (newest > LATEST ? ` · cycles ${LATEST + 1}–${newest} have only timing so far (see Speed)` : "");
   const box = document.getElementById("kpis");
   box.textContent = "";
+  const tileNotes = new Map();
   for (const k of KPIS) {
     // Also the running value when the run has no per-cycle one (the scope label says which it is).
     const cum = (state.view === "cum" || !has(metric(k.per))) && has(metric(k.cum));
@@ -989,11 +1001,22 @@ function renderKpis() {
       }
       delta.append(`${Charts.signed(d, k.unit)} vs. cycle ${DATA.cycles[i - 1]}`);
     }
+    const used = [cum ? k.cum : k.per].flat().find((x) => x && DATA.metrics[x]);
+    const n = used ? sourceNote(DATA, [used]) : "";
+    if (n) tileNotes.set(n, [...(tileNotes.get(n) || []), k.label]);
     const sparkHost = html("div", { class: "spark-host" });
     const label = html("div", { class: "label" }, k.label, html("span", { class: "scope", text: cum ? " · so far" : " · this cycle" }));
     box.append(html("div", { class: "tile" }, label, html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost));
     schedule(sparkHost, (host) => Charts.spark(host, values, i), resizer);
   }
+  // Tiles this run doesn't log to W&B, and where their numbers come from.
+  let note = document.getElementById("kpi-note");
+  if (!note) {
+    note = html("p", { id: "kpi-note", class: "foot kpi-note" });
+    box.after(note);
+  }
+  note.textContent = [...tileNotes].map(([n, labels]) => `${labels.join(", ")}: ${n}`).join(" ");
+  note.hidden = !tileNotes.size;
 }
 
 const button = (attrs, onClick) => {
@@ -1510,7 +1533,26 @@ function mergeExtra(d, x) {
   }
   d.cycles = cycles;
   d.extraSource = x.source;
+  d.extraKeySet = new Set(d.extraKeys);
+  d.textSample = x.text_sample || null;
 }
+
+// Where a chart's numbers come from when the run doesn't log them to W&B: the text keys from the sample of each cycle's
+// pages (every 10th part, counts scaled up), the HTTP and domain keys from the whole WARC index, priority vs score
+// from the whole fetch list and parse data. Empty when every key is the run's own W&B key.
+function sourceNote(d, keys) {
+  if (!d || !d.extraKeySet) return "";
+  const used = keys.filter((k) => d.extraKeySet.has(k));
+  if (!used.length) return "";
+  const s = d.textSample;
+  if (s && used.some((k) => /^text(_summary)?\//.test(k))) {
+    const f = s.parts_total / s.parts;
+    return `not logged to W&B; read from ${s.parts} of ${s.parts_total} parts (about 1 in ${Math.round(f)}) of each cycle's pages, with counts scaled up ×${f.toFixed(1)}, and means and shares as in the sample.`;
+  }
+  if (used.some((k) => k.startsWith("frontier/"))) return "not logged to W&B; read from each cycle's whole fetch list and parse data.";
+  return "not logged to W&B; read from each cycle's whole WARC index.";
+}
+const capital = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 async function loadRun(entry) {
   const ready = () => window.CRAWL_DATA && window.CRAWL_DATA[entry.id];
