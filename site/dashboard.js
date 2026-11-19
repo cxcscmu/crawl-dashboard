@@ -1255,7 +1255,12 @@ function renderJunk() {
   if (!Junk.has(state.run)) {
     return html("p", { class: "empty", text: "No page-text sample for this run. The junk check covers crawls 233150, 259887 and 265639, three sampled cycles each." });
   }
-  return Junk.render({ run: state.run, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
+  // Ticking a rule redraws the section and keeps the choice in the link.
+  const rerender = () => {
+    renderSections();
+    syncUrl();
+  };
+  return Junk.render({ run: state.run, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
 }
 
 function renderRaw() {
@@ -1537,6 +1542,7 @@ function syncUrl() {
   if (state.view === "cum") p.set("view", "cum");
   if (state.cycle !== LATEST) p.set("cycle", state.cycle);
   if (state.tab !== TABS[0].id) p.set("tab", state.tab);
+  if (state.tab === "junk" && Junk.param()) p.set("junk", Junk.param());
   const cmp = comparedRuns();
   if (cmp.length) p.set("compare", cmp.join(","));
   try {

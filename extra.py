@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 HOME = os.path.expanduser("~/crawl-data")
 sys.path.insert(0, HOME + "/extract-src")
@@ -30,7 +31,7 @@ import crawl_logger as cl  # noqa: E402
 
 OUT = Path(__file__).resolve().parent / "site" / "data" / "raw"
 TABLE_KEYS = {"domains/top_domains", "domains/top_domains_cumulative", "domains/top_new_domains", "text/languages",
-              "text/languages_cumulative"}
+              "text/languages_cumulative", "fetch/top_failing_domains", "text/top_domains_by_pages", "text/top_domains_by_fineweb_edu"}
 
 
 def cycles(pattern):
@@ -89,6 +90,24 @@ def domain_metrics(doms, hosts, st, cycle):
     return m
 
 
+def domain_tables(path):
+    """text/top_domains_by_pages and _by_fineweb_edu, as crawl_logger.text_metrics makes them, from the extract's per-domain
+    table (every parsed page of the cycle, domains with 3+ pages): English scored pages and their mean scores. Exact counts,
+    not the text sample's: a ranking by an estimated count would just pick the domains whose sample came out high."""
+    if not os.path.exists(path):
+        return {}
+    d = pd.read_csv(path, sep="\t", keep_default_na=False, na_values=[""], usecols=["domain", "scored", "edu_mean", "dclm_mean", "score_mean"], dtype={"domain": str})
+    d = d[d.scored > 0]
+    if not len(d):
+        return {}
+    cols = ("domain", "English scored pages", "FineWeb-Edu mean", "fastText quality mean", "combined mean")
+    row = lambda x: (x.domain, int(x.scored), round(float(x.edu_mean), 4), round(float(x.dclm_mean), 4), round(float(x.score_mean), 4))
+    by_pages = d.sort_values("scored", ascending=False).head(50)
+    by_edu = d[d.scored >= 20].sort_values("edu_mean", ascending=False).head(50)  # Jerry's cut: 20+ English pages
+    return {"text/top_domains_by_pages": cl.table(cols, [row(x) for x in by_pages.itertuples()]),
+            "text/top_domains_by_fineweb_edu": cl.table(cols, [row(x) for x in by_edu.itertuples()])}
+
+
 def build(run_id, prefix):
     cs = sorted(set(cycles(f"{HOME}/v2cdx/{prefix}-c*.json")) | set(cycles(f"{HOME}/v2text/{prefix}-c*.json")))
     if cs != list(range(1, len(cs) + 1)):
@@ -100,21 +119,29 @@ def build(run_id, prefix):
         p = f"{HOME}/v2cdx/{prefix}-c{c}.json"
         if os.path.exists(p):
             d = json.load(open(p))
-            m.update(cl.fetch_metrics({}, collections.Counter(d["status"]), collections.Counter(), st))
-            m.pop("fetch/top_failing_domains", None)
-            # domains with a 403/404/429/5xx need the failing domains, which the HTTP job counted itself
-            m.update({k: v for k, v in d["metrics"].items() if k.startswith("fetch/domains_with_http_")})
-            doms = collections.Counter()
+            # every registered domain's HTTP 200s and error responses (403, 429, 404, 410, other 4xx, 5xx) in the WARC index
+            doms, fail = collections.Counter(), collections.Counter()
             with gzip.open(f"{HOME}/v2cdx/{prefix}-c{c}.domains.tsv.gz", "rt") as fh:
-                next(fh)
+                head = next(fh).rstrip("\n").split("\t")
+                cls = {i: h.removeprefix("http_") for i, h in enumerate(head) if h.startswith("http_")}
                 for line in fh:
                     f = line.rstrip("\n").split("\t")
                     if int(f[1]) > 0:
                         doms[f[0]] += int(f[1])
+                    for i, k in cls.items():
+                        if int(f[i]):
+                            fail[f[0], k] += int(f[i])
+            fm = cl.fetch_metrics({}, collections.Counter(d["status"]), fail, st)
+            for k, v in d["metrics"].items():  # the HTTP job counted the same domains itself: they must agree
+                if k.startswith("fetch/domains_with_http_") and fm.get(k) != v:
+                    raise SystemExit(f"{prefix} c{c}: {k} is {fm.get(k)} from the domain file but {v} from the HTTP job")
+            m.update(fm)
             m.update(domain_metrics(doms, d["hosts_with_200"], st, c))
         p = f"{HOME}/v2text/{prefix}-c{c}.json"
         if os.path.exists(p):
-            m.update(cl.text_metrics(scaled(json.load(open(p))), Path("/nonexistent"), st, None))
+            s = json.load(open(p))
+            m.update(cl.text_metrics(scaled(s), Path("/nonexistent"), st, None))
+            m.update(domain_tables(f"{HOME}/v2/{prefix}-c{c}/domains.tsv.gz"))
         k = counts(f"{HOME}/v2/{prefix}-c{c}/counts.tsv")
         if k.get("pairs") and k.get("parse_scored"):
             m["frontier/priority_vs_page_score_spearman"] = k["x_spearman_prio_score_e6"] / 1e6

@@ -74,7 +74,7 @@ const Raw = (() => {
     },
     priority: {
       label: "Priority vs score", sort: "pairs", cols: ["pairs", "spearman", "pearson", "priority_mean", "score_mean"],
-      note: "Within one domain: the priority a URL was selected with against the fastText page score it got once fetched. Ranking by a correlation keeps domains with 30+ scored pairs.",
+      note: "Within one domain: the priority a URL was selected with against the page score it got once fetched. Ranking by a correlation keeps domains with 30+ scored pairs.",
     },
     links: {
       label: "Links", sort: "outlinks", cols: ["parsed", "outlinks", "perPage", "crossPct"],
@@ -167,7 +167,8 @@ const Raw = (() => {
     const hasPriority = S.spearman_pages != null;
     const series = (f) => R.cycles.map((c) => f(R.summary[c], c) ?? null);
 
-    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + "Domain rows cover domains with 3 or more pages in the cycle." }));
+    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + (R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
+      (R.example_cycles ? ` Example pages are kept for cycle${R.example_cycles.length > 1 ? "s" : ""} ${R.example_cycles.join(", ")}${R.text_chars ? `, with their first ${F.int(R.text_chars)} characters of text` : ""}.` : "") }));
 
     const tile = (label, v, note) => html("div", { class: "tile" }, html("div", { class: "label", text: label }), html("div", { class: "value", text: v }), html("div", { class: "delta", text: note || "" }));
     const tiles = html("section", { class: "kpis raw-tiles", "aria-label": `Cycle ${cycle} raw-data summary` },
@@ -179,7 +180,7 @@ const Raw = (() => {
         tile("Fetched, not on the fetch list", F.count(U.unlisted_urls), U.unlisted_urls ? `${F.pct((100 * U.unlisted_redirect_targets) / U.unlisted_urls)} are redirect targets` : ""),
         tile("Bot-check pages", F.count(U.bot_pages), `on ${F.count(U.bot_domains)} domains, all scored 0`));
     }
-    tiles.append(tile("Priority vs page score", hasPriority ? F.corr(S.spearman_pages) : "n/a", hasPriority ? `Spearman, all pages; ${F.corr(S.spearman_within_median)} within a domain` : "seed cycle: every priority is 0"));
+    tiles.append(tile("Priority vs page score", hasPriority ? F.corr(S.spearman_pages) : "n/a", hasPriority ? `Spearman, all pages; ${F.corr(S.spearman_within_median)} within a domain` : S.priority_na || "seed cycle: every priority is 0"));
     box.append(tiles);
 
     const card = (o) => {
@@ -213,8 +214,8 @@ const Raw = (() => {
       title: "Priority vs page score", sub: "Spearman correlation per cycle", height: 260,
       draw: (h) => Charts.line(h, { name: "Priority vs page score per cycle", x: R.cycles, series: corr, unit: "corr", fmt: F.corr, height: 260, legend: true, selectedX: cycle }),
       table: seriesTable(R.cycles, "Cycle", corr, "corr"),
-      foot: "Page score = the page's own quality score once fetched: its fastText quality and FineWeb-Edu scores, each turned into a percentile, averaged. Priority = what the URL was selected with: the average page score of the already-fetched pages that link to it. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs" +
-        (hasPriority ? `, ${F.pct(S.spearman_within_negative_pct)} of which are negative in cycle ${cycle}.` : ".") + " The first cycle is the seed list, where every priority is 0.",
+      foot: `Page score = the page's own quality score once fetched: its fastText quality and FineWeb-Edu scores, each turned into a percentile, averaged. Priority = what the URL was selected with: ${R.priority_def || "the average page score of the already-fetched pages that link to it"}. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs` +
+        (hasPriority ? `, ${F.pct(S.spearman_within_negative_pct)} of which are negative in cycle ${cycle}.` : ".") + (R.seed_note ?? " The first cycle is the seed list, where every priority is 0."),
     }));
     if (S.hist) {
       // The extract keeps a 40 x 40 grid of page counts (priority band x score band); the quartiles of the page score
@@ -292,7 +293,7 @@ const Raw = (() => {
     const output = html("div");
     let T = null;
     let update = () => {};
-    box.append(modes, html("p", { class: "explorer-note", text: mode.note }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
+    box.append(modes, html("p", { class: "explorer-note", text: R.list_limit ? mode.note.replace("250 at most", R.list_limit) : mode.note }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
 
     loadDomains(ctx.run, cycle).then((table) => {
       if (!table) { status.textContent = "The domain table for this cycle couldn't be loaded."; return; }

@@ -392,3 +392,11 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .junk-ex td:first-child, .junk-ex th:first-child { text-align: left; white-space: normal; min-width: 130px; }
 .junk-ex .junk-url, .junk-ex th.junk-url { text-align: left; white-space: normal; min-width: 240px; max-width: 420px; overflow-wrap: anywhere; }
 .junk-ex .junk-url .sub { margin-top: 2px; }
+.junk-pick { display: grid; gap: 8px; margin: 4px 0 14px; }
+.junk-sets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 10px; }
+.junk-set { margin: 0; padding: 8px 12px 10px; border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.junk-set legend { padding: 0 4px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; }
+.junk-check { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; color: var(--ink); font-size: 13px; line-height: 1.35; cursor: pointer; }
+.junk-check input { margin-top: 2px; flex: none; }
+.junk-t { align-items: center; margin-top: 4px; color: var(--ink-2); cursor: default; }
+.junk-t select { margin-left: auto; padding: 3px 6px; font-size: 12.5px; }

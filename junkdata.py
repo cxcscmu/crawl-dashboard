@@ -167,9 +167,51 @@ def findings_csvs(df, out):
     pd.DataFrame(rep).to_csv(f"{out}/junk_repetition.csv", index=False)
 
 
+# Per-page file for choosing rules on the page: the browser recomputes every rate for any set of rules.
+PAGE_RULES = BASIC + OURS + ["rep_lines", "line_removal"]  # bit i of each page's mask = failed PAGE_RULES[i]
+SCORE_KEYS = [("fasttext", "F_dclm"), ("edu", "F_edu"), ("combined", "combined"), ("priority", "prio_pct")]
+
+
+def page_file(run_id, g):
+    """window.CRAWL_JUNK_PAGES[run]: base64 little-endian arrays, one entry per sampled page.
+    mask   uint16  failed rules, bit i = PAGE_RULES[i]
+    flags  uint8   bit0 random sample, bit1 high-score, bit2 fastText >= 0.5, bit3 FineWeb-Edu >= 0.6, bit4 combined >= 0.95,
+                   bits 5-6 index of the sampled cycle
+    bands  uint16  4 bits per score band (fastText, FineWeb-Edu, page score, priority; 15 = none), lowest bits first
+    qfull  uint8   repeated n-gram level on the whole text: ceil(level * 20), capped at 255; fails a threshold t when > 20 t
+    qprose uint8   the same on lines of 6+ words"""
+    import base64
+    n = len(g)
+    mask = np.zeros(n, dtype="<u2")
+    for i, r in enumerate(PAGE_RULES):
+        mask |= (g[r].to_numpy(bool).astype("<u2") << i)
+    cyc = {c: i for i, c in enumerate(sorted(g.cycle.unique()))}
+    flags = (g.base.to_numpy(bool).astype(np.uint8) | (g.high.to_numpy(bool).astype(np.uint8) << 1)
+             | ((g.dclm >= .5).to_numpy().astype(np.uint8) << 2) | ((g.edu >= .6).to_numpy().astype(np.uint8) << 3)
+             | ((g.combined >= .95).to_numpy().astype(np.uint8) << 4) | (g.cycle.map(cyc).to_numpy().astype(np.uint8) << 5))
+    bands = np.zeros(n, dtype="<u2")
+    for k, (_, col) in enumerate(SCORE_KEYS):
+        x = g[col].to_numpy(float)
+        b = np.searchsorted(EDGES, x, side="right") - 1  # [EDGES[i], EDGES[i+1]) as pd.cut(right=False)
+        b = np.where(np.isnan(x) | (b < 0) | (b > 7), 15, b).astype("<u2")
+        bands |= b << (4 * k)
+    q = lambda v: np.minimum(255, np.ceil(v.to_numpy(float) * 20)).astype(np.uint8)
+    enc = lambda a: base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
+    payload = {"n": n, "cycles": sorted(int(c) for c in cyc), "rules": PAGE_RULES, "scores": [k for k, _ in SCORE_KEYS],
+               "mask": enc(mask), "flags": enc(flags), "bands": enc(bands), "qfull": enc(q(g.rep_full)), "qprose": enc(q(g.rep_prose))}
+    out = OUT.parent / "junk" / f"{run_id}.js"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("window.CRAWL_JUNK_PAGES=window.CRAWL_JUNK_PAGES||{};window.CRAWL_JUNK_PAGES[" + json.dumps(run_id) + "]="
+                   + json.dumps(payload, separators=(",", ":")) + ";\n")
+    return out
+
+
 def main():
     df = load()
     findings_csvs(df, HOME + "/analysis/findings")
+    for run, g in df.groupby("run"):
+        f = page_file(RUN_ID[run], g.reset_index(drop=True))
+        print(f"{f}: {f.stat().st_size / 1e6:.2f} MB")
     data = {"indicators": INDICATORS, "bands": BANDS, "rules": {r: LABEL[r] for r in RULES},
             "counted": {"page": BASIC + OURS, "prose": BASIC + OURS + ["rep_ngram (6+ word lines)"], "dclm": RULES}, "runs": {}}
     for run, g in df.groupby("run"):

@@ -116,7 +116,10 @@ def cause(r):
     return ", ".join(out)
 
 
-def build_cycle(run, folder, cycle, out):
+def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True):
+    """max_domains keeps only that many domains (most HTTP 200s first, plus every example domain) in the cycle's domain
+    table; the cycle's own numbers still use every domain. text_chars cuts example texts (chars keeps the full length).
+    Without examples the cycle gets an empty example list."""
     d = pd.read_csv(f"{folder}/domains.tsv.gz", sep="\t", keep_default_na=False, na_values=[""])
     d["domain"] = d.domain.fillna("").astype(str)
     counts = pd.read_csv(f"{folder}/counts.tsv", sep="\t", header=None, index_col=0)[1]
@@ -126,8 +129,10 @@ def build_cycle(run, folder, cycle, out):
     examples = {}
     whole = []
     with gzip.open(f"{folder}/examples.jsonl.gz", "rt") as f:
-        for line in f:
+        for line in f if with_examples else []:
             e = json.loads(line)
+            if text_chars and e.get("text") and len(e["text"]) > text_chars:
+                e["text"] = e["text"][:text_chars]
             groups = e.pop("buckets").split(",")
             e["groups"] = groups
             own = [g for g in groups if not g.startswith("global_")]
@@ -142,6 +147,10 @@ def build_cycle(run, folder, cycle, out):
     d["has_ex"] = d.domain.isin(examples.keys()).astype(int)
     d["failed"] = d.f_gone + d.f_retry
     d["fetches"] = d.f_success + d.f_redir + d.f_gone + d.f_retry + d.f_notmod
+    full = d
+    if max_domains and len(d) > max_domains:
+        d = d.sort_values(["cdx200", "parsed"], ascending=False)
+        d = d[(np.arange(len(d)) < max_domains) | (d.has_ex == 1)]
     table = {"domain": d.domain.tolist()}
     ints = ["listed", "fetches", "f_success", "f_redir", "f_gone", "f_retry", "cdx200", "parsed", "lang_en", "scored", "outlinks", "outlinks_cross", "pairs", "has_ex"]
     if us is not None:
@@ -153,7 +162,8 @@ def build_cycle(run, folder, cycle, out):
         table[c] = col(d[c], 3)
     js(f"{out}/{run}/domains-c{cycle}.js", "CRAWL_RAW_DOM", f"{run}/{cycle}", table)
 
-    # cycle summary
+    # cycle summary, over every domain
+    d = full
     rank = lambda a, b: float(a.rank().corr(b.rank()))
     sc = d[d.scored >= 10]
     within = d[(d.pairs >= 30) & d.spearman.notna()].spearman
@@ -162,18 +172,27 @@ def build_cycle(run, folder, cycle, out):
     for lo, hi, label in BUCKETS:
         b = listed[(listed.listed > lo) & (listed.listed <= hi)]
         buckets.append({"label": label, "domains": len(b), **{k: int(b[k].sum()) for k in ["f_success", "f_redir", "f_gone", "f_retry"]}})
-    has_prio = counts.get("x_spearman_prio_score_e6", 0) != 0 or cycle > 1
+    # Priority vs score needs scored pages and priorities that differ: a fastText-priority crawl's first cycle is its seed
+    # list (every priority 0), while an OPIC crawl's seeds already hold different cash.
+    scored = counts.get("parse_scored", 0) > 0 and counts.get("pairs", 0) > 0
+    has_prio = scored and (counts.get("x_spearman_prio_score_e6", 0) != 0 or cycle > 1)
     hist = pd.read_csv(f"{folder}/hist2d.tsv", sep="\t", comment="#", header=None).values.tolist()
+    # The grid's priority bands are 0.025 wide on a 0-1 scale (a fastText-priority crawl's average page score). OPIC cash
+    # is far smaller, so nearly every page falls in the first band and the chart would show nothing: leave it out.
+    rows = [sum(r) for r in hist]
+    if sum(rows) and rows[0] / sum(rows) > 0.9:
+        hist = None
     p20 = d[d.parsed >= 20]
     summary = {
         "counts": {k: int(counts[k]) for k in ["list_urls", "f_success", "f_redir", "f_gone", "f_retry", "cdx200", "cdx_other", "parse_pages", "parse_scored", "pairs", "domains_written", "domains_small"] if k in counts},
-        "spearman_pages": clean(counts.get("x_spearman_prio_score_e6", np.nan) / 1e6) if has_prio and cycle > 1 else None,
-        "spearman_domain_means": clean(rank(sc.priority_mean, sc.score_mean)) if cycle > 1 and len(sc) > 2 else None,
-        "spearman_within_median": clean(within.median()) if cycle > 1 and len(within) else None,
-        "spearman_within_negative_pct": clean(100 * (within < 0).mean(), 1) if cycle > 1 and len(within) else None,
-        "spearman_within_domains": int(len(within)) if cycle > 1 else 0,
+        "spearman_pages": clean(counts.get("x_spearman_prio_score_e6", np.nan) / 1e6) if has_prio else None,
+        "spearman_domain_means": clean(rank(sc.priority_mean, sc.score_mean)) if has_prio and len(sc) > 2 else None,
+        "spearman_within_median": clean(within.median()) if has_prio and len(within) else None,
+        "spearman_within_negative_pct": clean(100 * (within < 0).mean(), 1) if has_prio and len(within) else None,
+        "spearman_within_domains": int(len(within)) if has_prio else 0,
+        "priority_na": None if has_prio else ("this crawl doesn't score pages" if not scored else "seed cycle: every priority is 0"),
         "buckets": buckets,
-        "hist": hist if cycle > 1 else None,
+        "hist": hist if has_prio else None,
         "outlinks": int(d.outlinks.sum()), "outlinks_cross": int(d.outlinks_cross.sum()),
         "outlinks_per_page_median": clean((p20.outlinks / p20.parsed).median(), 1) if len(p20) else None,
         "url_level": totals or None,
@@ -191,13 +210,30 @@ def main():
     ap.add_argument("--src", default=os.path.expanduser("~/crawl-data"))
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "site", "data", "raw"))
     ap.add_argument("--label", default=None)
+    ap.add_argument("--max-domains", type=int, default=None, help="domain-table rows per cycle (most HTTP 200s first)")
+    ap.add_argument("--text-chars", type=int, default=None, help="cut example texts to this many characters")
+    ap.add_argument("--example-cycles", default=None, help="comma list: only these cycles get example pages")
+    ap.add_argument("--priority-def", default=None, help="what priority is in this crawl, for the page's notes")
+    ap.add_argument("--list-limit", default=None, help="the per-domain fetch-list limit, for the page's notes")
+    ap.add_argument("--seed-note", default=None, help="the note on the first cycle's priorities ('' for none)")
     a = ap.parse_args()
     lo, _, hi = a.cycles.partition("-")
     cycles = [c for c in range(int(lo), int(hi or lo) + 1) if os.path.exists(f"{a.src}/{a.prefix}-c{c}/DONE")]
     if not cycles:
         sys.exit(f"No finished cycles for {a.prefix} in {a.src}")
-    summaries = {c: build_cycle(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out) for c in cycles}
-    js(f"{a.out}/{a.run}.js", "CRAWL_RAW", a.run, {"label": a.label or f"crawl {a.prefix}", "cycles": cycles, "summary": summaries})
+    ex_cycles = [int(c) for c in a.example_cycles.split(",")] if a.example_cycles else cycles
+    summaries = {c: build_cycle(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out, a.max_domains, a.text_chars, c in ex_cycles) for c in cycles}
+    index = {"label": a.label or f"crawl {a.prefix}", "cycles": cycles, "summary": summaries}
+    if a.max_domains:
+        index["domain_rows"] = f"Domain rows cover the {a.max_domains:,} domains with the most pages in the cycle (of those with 3 or more), plus every domain with example pages."
+    if a.example_cycles:
+        index["example_cycles"] = [c for c in ex_cycles if c in cycles]
+    if a.text_chars:
+        index["text_chars"] = a.text_chars
+    for k in ("priority_def", "list_limit", "seed_note"):
+        if getattr(a, k) is not None:
+            index[k] = getattr(a, k)
+    js(f"{a.out}/{a.run}.js", "CRAWL_RAW", a.run, index)
     print("wrote", a.out)
 
 

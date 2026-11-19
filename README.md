@@ -36,6 +36,16 @@ The **Raw data check** section doesn't come from W&B. It shows numbers read stra
 
 This writes `site/data/raw/crawl-233150.js` plus one folder of domain tables and example pages. A run without these files simply has an empty Raw data check tab.
 
+A long crawl would not fit the site's 1 GB at full size (233150's 9 cycles take 475 MB), so the three newer crawls are built trimmed: every cycle's summary, domain tables cut to the 3,000 domains with the most pages, and example pages for three cycles only, with their first 1,500 characters. Their per-URL files aren't downloaded, so the repeat-record and bot-page counts are left out. The notes on priority and on the per-domain fetch-list limit follow each crawl:
+
+```bash
+OPIC="its OPIC cash, which the pages linking to it pass on, weighted by their page score"
+SEED=" The seeds already hold different amounts of cash in the first cycle."
+.venv/bin/python rawdata.py crawl-259887 259887 1-50 --src ~/crawl-data/v2 --label "crawl 259887" --max-domains 3000 --text-chars 1500 --example-cycles 5,25,50 --priority-def "$OPIC" --list-limit "up to the domain's Common Crawl limit, set from its harmonic-centrality rank" --seed-note "$SEED"
+.venv/bin/python rawdata.py crawl-265639 265639 1-47 --src ~/crawl-data/v2 --label "crawl 265639" --max-domains 3000 --text-chars 1500 --example-cycles 5,25,47 --priority-def "$OPIC" --seed-note "$SEED"
+.venv/bin/python rawdata.py crawl-269821 269821 1-26 --src ~/crawl-data/v2 --label "crawl 269821" --max-domains 3000 --text-chars 1500 --example-cycles 5,15,26 --priority-def "its TrustRank-style cash, passed on from the seeds and shrinking by 0.85 at each link step" --seed-note ""
+```
+
 To put a new build on the live page, replace the release file the publish job downloads (the next hourly run picks it up):
 
 ```bash
@@ -53,7 +63,7 @@ Crawls 259887, 265639 and 269821 log only the wall-clock keys (`wall/*`) to W&B.
 ~/crawl-data/py/bin/python extra.py crawl-259887 259887 crawl-265639 265639 crawl-269821 269821
 ```
 
-Each run gets `site/data/raw/extra-<run>.js`, which ships in the same raw-data release as above. The page adds only keys W&B doesn't have, so a backfilled W&B run takes over by itself. The text keys come from every 10th part of each cycle's segment; their counts are scaled up, and the means and shares are the sample's own. Checked against crawl 233150, which logs everything: domains and HTTP shares match exactly, and score means are within about 1%.
+Each run gets `site/data/raw/extra-<run>.js`, which ships in the same raw-data release as above. The top-domain tables (English pages, FineWeb-Edu) come from the extract's per-domain counts of every parsed page, and the domains with the most error responses from the WARC index; on 233150 the top-domain tables match W&B exactly. The page adds only keys W&B doesn't have, so a backfilled W&B run takes over by itself. The text keys come from every 10th part of each cycle's segment; their counts are scaled up, and the means and shares are the sample's own. Checked against crawl 233150, which logs everything: domains and HTTP shares match exactly, and score means are within about 1%.
 
 ## Junk check (optional)
 
@@ -69,7 +79,7 @@ cd junk
 cd .. && ~/crawl-data/py/bin/python junkdata.py   # -> site/data/raw/junk.js
 ```
 
-`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). The page's toggle switches between three junk definitions: the page rules alone; the page rules plus repeated n-grams on lines of 6+ words; and every DCLM rule as written. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
+`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). Readers tick which rules count as junk, with a looser threshold for the n-gram rule if they like; three presets set the page rules alone, the page rules plus repeated n-grams on lines of 6+ words, and every DCLM rule as written. Every rate is recomputed in the browser from `site/data/raw/junk/<run>.js` (one entry per sampled page, about 1.3 MB per crawl, loaded when the tab opens); without that file the presets still work from `junk.js`. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
 
 ## View it
 
