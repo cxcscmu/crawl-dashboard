@@ -26,7 +26,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
 
@@ -66,5 +66,17 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
+      # deploy-pages sometimes asks for the artifact a fraction of a second after it's finalized and GitHub doesn't
+      # list it yet ("No artifacts named github-pages were found"; about half the failed runs in Nov 2026). A short
+      # pause first, and one more try a minute later; the run fails only if both do.
+      - name: Let the uploaded site settle
+        run: sleep 20
       - id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - name: Wait before trying the deploy again
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
