@@ -26,8 +26,101 @@ const Raw = (() => {
   const loadIndex = (run) => load(`data/raw/${run}.js`, () => index(run)).then(Boolean);
   const loadDomains = (run, cycle) => load(`data/raw/${run}/domains-c${cycle}.js`, () => (window.CRAWL_RAW_DOM || {})[`${run}/${cycle}`]);
   const fileName = (domain) => domain.toLowerCase().replace(/[^a-z0-9.-]/g, "_").slice(0, 120);
-  const loadExamples = (run, cycle, domain) =>
-    load(`data/raw/${run}/ex-c${cycle}/${domain ? fileName(domain) : "_cycle"}.js`, () => (window.CRAWL_RAW_EX || {})[`${run}/${cycle}/${domain}`]);
+  // A build with --packs K keeps each cycle's per-domain example pages in K files: the domain's is 32-bit FNV-1a of its
+  // UTF-8 bytes, mod K (rawdata.py: pack_of).
+  const packOf = (domain, packs) => {
+    let h = 0x811c9dc5;
+    for (const b of new TextEncoder().encode(domain)) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+    return h % packs;
+  };
+  // The full build (every domain, example pages) is on Hugging Face (cx-cmu/crawl-pretrain, dashboard-raw-data/); the
+  // site keeps a trimmed copy (3,000 domains per cycle, no example pages), which loads first. Example pages and "every
+  // domain" come from the full copy when it's there; when it isn't (before the pull request is merged, or offline),
+  // those requests fail quietly and the tab shows the trimmed copy alone. ?hfrev=refs/pr/3 tries an unmerged revision.
+  const HF = `https://huggingface.co/datasets/cx-cmu/crawl-pretrain/resolve/${encodeURIComponent(new URLSearchParams(location.search).get("hfrev") || "main")}/dashboard-raw-data/`;
+  const FULL = new Map(); // run -> Promise(full index or null); full.value once settled
+  // The full index sets the same global as the site's, so keep the site's in place and file the full one apart.
+  function loadFull(run) {
+    if (!FULL.has(run)) {
+      const entry = { value: undefined };
+      entry.promise = new Promise((resolve) => {
+        // the load event fires right after the script runs, so the site's index is back before anything renders
+        const keep = (window.CRAWL_RAW || {})[run];
+        const s = document.createElement("script");
+        s.src = `${HF}${run}.js`;
+        const done = (ok) => {
+          const g = window.CRAWL_RAW || (window.CRAWL_RAW = {});
+          entry.value = ok && g[run] && g[run] !== keep && g[run].example_packs ? g[run] : null;
+          if (keep !== undefined) g[run] = keep;
+          resolve(entry.value);
+        };
+        s.onload = () => done(true);
+        s.onerror = () => done(false);
+        document.head.append(s);
+      });
+      FULL.set(run, entry);
+    }
+    return FULL.get(run);
+  }
+  const fullOf = (run) => (FULL.get(run) || {}).value || null;
+  const fullDom = new Map(); // "<run>/<cycle>" -> Promise(full domain table): replaces the trimmed table in the global
+  const loadFullDomains = (run, cycle) => {
+    const key = `${run}/${cycle}`;
+    if (!fullDom.has(key)) {
+      // one full table in memory at a time (CC's biggest is ~600k domains, ~120 MB in the browser): drop the others;
+      // their cycles go back to the site's trimmed table and can load every domain again
+      for (const k of [...fullDom.keys()]) {
+        if (window.CRAWL_RAW_DOM) delete window.CRAWL_RAW_DOM[k];
+        fullDom.delete(k);
+      }
+      fullDom.set(key, new Promise((resolve) => {
+        const s = document.createElement("script");
+        s.src = `${HF}${run}/domains-c${cycle}.js`;
+        s.onload = () => resolve((window.CRAWL_RAW_DOM || {})[key] || null);
+        s.onerror = () => resolve(null);
+        document.head.append(s);
+      }));
+      fullDom.get(key).done = false;
+      fullDom.get(key).then(() => { fullDom.get(key).done = true; });
+    }
+    return fullDom.get(key);
+  };
+  const exFile = (packs, domain) => (!domain ? "_cycle" : packs ? `p${String(packOf(domain, packs)).padStart(2, "0")}` : fileName(domain));
+  // Example packs hold many domains (up to ~18 MB of text): keep the last PACKS_KEPT in memory, drop older ones (they
+  // load again if their domains are opened again).
+  const PACKS_KEPT = 6;
+  const packOrder = []; // [{ src, keys }]
+  function loadPack(src, key) {
+    const ex = () => (window.CRAWL_RAW_EX || {})[key];
+    if (ex() !== undefined) return Promise.resolve(ex());
+    if (!loads.has(src)) {
+      loads.set(src, new Promise((resolve) => {
+        const before = new Set(Object.keys(window.CRAWL_RAW_EX || {}));
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = () => {
+          packOrder.push({ src, keys: Object.keys(window.CRAWL_RAW_EX || {}).filter((k) => !before.has(k)) });
+          while (packOrder.length > PACKS_KEPT) {
+            const old = packOrder.shift();
+            for (const k of old.keys) delete window.CRAWL_RAW_EX[k];
+            loads.delete(old.src);
+          }
+          resolve();
+        };
+        s.onerror = () => resolve();
+        document.head.append(s);
+      }));
+    }
+    return loads.get(src).then(ex);
+  }
+  const loadExamples = (run, cycle, domain) => {
+    const full = fullOf(run);
+    const base = full ? `${HF}${run}` : `data/raw/${run}`;
+    const packs = (full || index(run) || {}).example_packs;
+    const src = `${base}/ex-c${cycle}/${exFile(packs, domain)}.js`;
+    const ready = () => (window.CRAWL_RAW_EX || {})[`${run}/${cycle}/${domain}`];
+    return domain && packs ? loadPack(src, `${run}/${cycle}/${domain}`) : load(src, ready);
+  };
 
   const fmt = { int: F.int, pct: F.pct, corr: F.corr, score: F.score, num: F.num };
   const show = (v, kind) => (v == null || v === "" ? "—" : kind === "text" ? v : fmt[kind](v));
@@ -166,9 +259,19 @@ const Raw = (() => {
     const U = S.url_level;
     const hasPriority = S.spearman_pages != null;
     const series = (f) => R.cycles.map((c) => f(R.summary[c], c) ?? null);
+    // the full copy on Hugging Face, once it has answered (example pages and every domain)
+    if (!FULL.has(ctx.run)) loadFull(ctx.run).promise.then((full) => full && ctx.rerender());
+    const RF = fullOf(ctx.run);
+    const exOk = !R.examples_left_out || !!RF;
+    const exDomains = new Set(((RF || R).summary[cycle] || {}).example_domains || []);
+    const hasEx = (T, i) => (RF ? exDomains.has(T.domain[i]) : !!T.has_ex[i]);
+    const domKey = `${ctx.run}/${cycle}`;
+    const everyDomain = !!(fullDom.get(domKey) || {}).done;
 
-    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${ctx.label || R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + (R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
-      (R.examples_left_out ? " Example pages with their text are left out of this version, to keep the site within GitHub's size limit; every number here still counts every page."
+    box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${ctx.label || R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") +
+      (everyDomain ? "Domain rows cover every domain with 3 or more pages in the cycle (the full copy on Hugging Face)." : R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
+      (RF ? " Example pages with their text, and every domain on request, come from the full copy on Hugging Face (cx-cmu/crawl-pretrain, dashboard-raw-data/)."
+        : R.examples_left_out ? " Example pages with their text are left out of this version, to keep the site within GitHub's size limit; every number here still counts every page."
         : R.example_cycles ? ` Example pages for single domains are kept for cycle${R.example_cycles.length > 1 ? "s" : ""} ${R.example_cycles.join(", ")}; the whole-cycle examples are there for every cycle${R.text_chars ? `, all with their first ${F.int(R.text_chars)} characters of text` : ""}.` : "") }));
 
     const tile = (label, v, note) => html("div", { class: "tile" }, html("div", { class: "label", text: label }), html("div", { class: "value", text: v }), html("div", { class: "delta", text: note || "" }));
@@ -300,7 +403,16 @@ const Raw = (() => {
     let update = () => {};
     const modeNote = (R.list_limit ? mode.note.replace("250 at most", R.list_limit) : mode.note) +
       (S.lang_na && ui.mode === "mismatch" ? ` This crawl doesn't tag page languages (it loads no language or score model), so there are no English or bot-check counts here; its English share comes from the text job, in the Language section.` : "");
-    box.append(modes, html("p", { class: "explorer-note", text: modeNote }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
+    // The trimmed table loads first; "every domain" swaps in the cycle's full table from Hugging Face (large for big cycles)
+    const every = RF && R.domain_rows && !everyDomain && ctx.button({ class: "tbtn", text: "Every domain (from Hugging Face)" }, () => {
+      every.disabled = true;
+      every.textContent = "Loading every domain…";
+      loadFullDomains(ctx.run, cycle).then((t) => {
+        if (t) ctx.rerender();
+        else every.textContent = "Couldn't load every domain";
+      });
+    });
+    box.append(modes, html("p", { class: "explorer-note", text: modeNote }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, every || null, status), output);
 
     loadDomains(ctx.run, cycle).then((table) => {
       if (!table) { status.textContent = "The domain table for this cycle couldn't be loaded."; return; }
@@ -330,20 +442,20 @@ const Raw = (() => {
         if (!total) { output.append(html("p", { class: "empty", text: q ? "No domain with 3+ pages in this cycle matches." : "Nothing to rank for this cycle." })); return; }
         const body = html("tbody");
         for (const [i] of rows) {
-          body.append(html("tr", {}, html("th", { scope: "row" }, ctx.button({ class: "domain-link", text: T.domain[i] + (T.has_ex[i] ? " ▸" : "") }, (e) => openDomain(ctx, R, cycle, T, i, e.currentTarget))),
+          body.append(html("tr", {}, html("th", { scope: "row" }, ctx.button({ class: "domain-link", text: T.domain[i] + (hasEx(T, i) ? " ▸" : "") }, (e) => openDomain(ctx, R, cycle, T, i, e.currentTarget))),
             ...cols.map((k) => html("td", { class: k === ui.sort ? "ranked-value" : k === "cause" ? "raw-cause" : "", text: show(value(T, k, i), COLS[k][1]) }))));
         }
         output.append(html("div", { class: "tbl-wrap", tabindex: "0", role: "region", "aria-label": "Domains, scroll horizontally for more columns" }, html("table", { class: "data explorer-table" },
           html("thead", {}, html("tr", {}, html("th", { scope: "col", text: "Domain" }), ...cols.map((k) => html("th", { scope: "col", text: COLS[k][0] })))), body)),
-          html("p", { class: "foot", text: R.examples_left_out ? "Select a domain for its numbers." : "▸ marks domains with example pages. Select a domain for its numbers and pages." }));
+          html("p", { class: "foot", text: exOk ? "▸ marks domains with example pages. Select a domain for its numbers and pages." : "Select a domain for its numbers." }));
       };
       search.addEventListener("input", update);
       sort.addEventListener("change", update);
       update();
     });
 
-    // ---- Whole-cycle examples (none in a build made with --no-examples; the blurb says so)
-    if (R.examples_left_out) return box;
+    // ---- Whole-cycle examples (none in a build made with --no-examples unless the full copy answers; the blurb says so)
+    if (!exOk) return box;
     box.append(html("h3", { class: "raw-h", text: `Example pages from the whole cycle ${cycle}` }));
     const exHost = html("div", {}, html("p", { class: "empty", text: "Loading example pages…" }));
     box.append(html("p", { class: "explorer-note", text: "Ten pages per group, picked over every domain in the cycle, with the text the crawler extracted." }), exHost);
@@ -359,15 +471,20 @@ const Raw = (() => {
   function fillDomain(panel, run, R, cycle, T, i) {
     const domain = T.domain[i];
     const cause = T.cause && T.cause[i];
+    // example pages: the site's own, or the full copy's on Hugging Face (the trimmed build marks none)
+    const RF = fullOf(run);
+    const exOk = !R.examples_left_out || !!RF;
+    const exList = ((RF || R).summary[cycle] || {}).example_domains || [];
+    const has = RF ? exList.includes(domain) : !!T.has_ex[i];
     panel.append(html("p", { text: `Cycle ${cycle}, read from the segment and the WARC index.` + (cause ? ` What stands out: ${cause}.` : "") }));
-    if (R.examples_left_out) {
+    if (!exOk) {
       panel.append(html("p", { class: "foot", text: "Example pages are left out of this version (the site's size limit)." }));
     } else {
       panel.append(html("h3", { text: "Example pages with crawled text" }));
     }
-    const exHost = html("div", {}, R.examples_left_out ? null : html("p", { class: "empty", text: T.has_ex[i] ? "Loading example pages…" : `No example pages were extracted for this domain in this cycle. ${R.summary[cycle].example_domains.length} of the largest domains have them.` }));
+    const exHost = html("div", {}, !exOk ? null : html("p", { class: "empty", text: has ? "Loading example pages…" : `No example pages were extracted for this domain in this cycle. ${exList.length} of the largest domains have them.` }));
     panel.append(exHost);
-    if (T.has_ex[i] && !R.examples_left_out) {
+    if (has && exOk) {
       loadExamples(run, cycle, domain).then((rows) => {
         exHost.textContent = "";
         exHost.append(rows ? exampleList(rows, R.summary[cycle].spearman_pages != null, !!T.records && T.records[i] > T.urls[i]) : html("p", { class: "empty", text: "The example pages couldn't be loaded." }));
@@ -397,7 +514,9 @@ const Raw = (() => {
             return [String(c), ...keys.map((k) => (j < 0 || !available(t, k) ? "—" : show(value(t, k, j), COLS[k][1])))];
           }),
         });
-        histBox.append(html("p", { class: "foot", text: "A dash means the domain had fewer than 3 pages in that cycle." }));
+        histBox.append(html("p", { class: "foot", text: R.domain_rows
+          ? "From the site's copy, which keeps each cycle's 3,000 biggest domains: a dash means the domain had fewer than 3 pages in that cycle or wasn't among them."
+          : "A dash means the domain had fewer than 3 pages in that cycle." }));
       });
     });
     panel.append(history);

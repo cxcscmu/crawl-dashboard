@@ -223,7 +223,7 @@ const Charts = (() => {
         mode: "lines+markers",
         name: s.label,
         legendrank: 100 + k,
-        x: spec.x,
+        x: s.x || spec.x, // a series can have its own x (compared runs over hours or days)
         y: s.values,
         connectgaps: false,
         line: { color: c, width: 2, dash: s.dash || "solid" },
@@ -273,7 +273,8 @@ const Charts = (() => {
         hovertemplate: "%{customdata}  Total<extra></extra>",
       });
     }
-    const layout = baseLayout(p, { ...spec, zero: true, max: Math.max(...totals) });
+    const layout = baseLayout(p, { ...spec, zero: true, max: Math.max(spec.yMax || 0, ...totals) });
+    if (spec.yMax) layout.yaxis.range = [0, spec.yMax * 1.05]; // compared runs share one scale
     Object.assign(layout, { barmode: "stack", bargap: dense ? 0 : 0.5, barcornerradius: dense ? 0 : 4 });
     layout.legend.traceorder = "normal"; // Plotly reverses stacked legends by default; the ranks above set the order
     plot(host, spec.height, spec.name, traces, layout);
@@ -309,7 +310,7 @@ const Charts = (() => {
       margin: { l: 8, r: 8, t: 8, b: 8 },
       paper_bgcolor: "rgba(0,0,0,0)",
       font: { family: FONT, size: 11, color: p.muted },
-      showlegend: true,
+      showlegend: spec.legend !== false,
       legend: { orientation: "v", x: 1.02, xanchor: "left", y: 0.5, yanchor: "middle", traceorder: "normal", font: { size: 12, color: p.ink2 }, bgcolor: "rgba(0,0,0,0)" },
       uniformtext: { mode: "hide", minsize: 10 },
       hoverlabel: { bgcolor: p.surface, bordercolor: p.border, font: { family: FONT, size: 12, color: p.ink } },
@@ -340,18 +341,19 @@ const Charts = (() => {
         hovertemplate: `%{customdata[0]}  ${spec.series.label}, scores %{customdata[1]}<extra></extra>`,
       },
     ];
-    if (spec.ref) {
-      // Step outline along the bin edges; the extra last point closes the final bin.
-      const y = [...spec.ref.values, spec.ref.values[last]];
+    // ref: one or several step outlines along the bin edges (an earlier cycle, or compared runs); the extra last point
+    // closes the final bin.
+    for (const ref of [spec.ref].flat().filter(Boolean)) {
+      const y = [...ref.values, ref.values[last]];
       traces.push({
         type: "scatter",
         mode: "lines",
-        name: spec.ref.label,
+        name: ref.label,
         x: [...starts, spec.bins[last].hi],
         y,
-        line: { shape: "hv", color: p.slot(spec.ref.slot), width: 2 },
+        line: { shape: "hv", color: p.slot(ref.slot), width: 2 },
         customdata: y.map((v, j) => [spec.fmt(v), ranges[Math.min(j, last)]]),
-        hovertemplate: `%{customdata[0]}  ${spec.ref.label}<extra></extra>`,
+        hovertemplate: `%{customdata[0]}  ${ref.label}<extra></extra>`,
       });
     }
     const layout = baseLayout(p, { unit: "pct", legend: spec.legend, zero: true, xTitle: "Score" });

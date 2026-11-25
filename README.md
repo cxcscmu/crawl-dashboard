@@ -44,7 +44,7 @@ SEED=" The seeds already hold different amounts of cash in the first cycle."
 python rawdata.py crawl-265639 265639 1-47 --src $B/v2 --out $P/rawdata/out --max-domains 3000 --no-examples --label "crawl 265639" --priority-def "$OPIC" --seed-note "$SEED" --procs 8
 ```
 
-`--procs` builds that many cycles at once, and `--score-def` says what the page score is in a crawl (prod: "its fastText quality score"). Crawls whose crawler tags no page languages (the CC-style crawl, TrustRank, plain OPIC) leave out the English and bot-check columns and say so. Without `--max-domains` and `--no-examples` you get the full version, which goes to Hugging Face rather than this site.
+`--procs` builds that many cycles at once, and `--score-def` says what the page score is in a crawl (prod: "its fastText quality score"). Crawls whose crawler tags no page languages (the CC-style crawl, TrustRank, plain OPIC) leave out the English and bot-check columns and say so. Without `--max-domains` and `--no-examples` you get the full version, which goes to Hugging Face rather than this site: the `dashboard-raw-data/` folder of the `cx-cmu/crawl-pretrain` dataset (built with `--packs 4`, which puts each cycle's per-domain example pages in 4 files; see that folder's README). The tab loads example pages, and every domain on request, from there, and keeps the site's trimmed copy when Hugging Face doesn't answer. `?hfrev=refs/pr/<n>` in the page's link points it at an unmerged pull request.
 
 To put a new build on the live page, replace the release file the publish job downloads. It holds all of `site/data/raw` (the Raw data check, `extra-*.js` and the junk files); the next hourly run, or a push, picks it up:
 
@@ -86,7 +86,9 @@ junkpage.py <out> nutch|resil <crawl id> <prefix>   # the page's files for one r
 `junkpage.py` writes `site/data/raw/junk/<run>/<nutch|resil>/`:
 - `c<N>.js`: one cycle's sampled pages as compact arrays, so the browser recomputes every rate for whatever rules are ticked;
 - `all.js`: a uniform subsample of up to 400k pages from every cycle, for the cumulative view;
-- `index.js`: the junk share per preset and rule over cycles, example pages, and each run's own score percentile cuts.
+- `index.js`: the junk share per preset and rule over cycles, example pages, and each run's own score percentile cuts;
+- `trend.js`: every cycle's sampled pages counted by their rule results (and repetition levels), so "Junk share over cycles" follows whatever rules are ticked;
+- `trend-hi/<cutoff>.js`: the same counts for the pages over each high-score cutoff, with their sampling weights, loaded when that cutoff is picked.
 
 `site/data/raw/junk/runs.js` lists the runs and texts that have files:
 
@@ -94,7 +96,7 @@ junkpage.py <out> nutch|resil <crawl id> <prefix>   # the page's files for one r
 python3 -c 'import json,os; d="site/data/raw/junk"; r={x: sorted(v for v in ("nutch","resil") if os.path.exists(f"{d}/{x}/{v}/index.js")) for x in sorted(os.listdir(d)) if os.path.isdir(f"{d}/{x}")}; open(f"{d}/runs.js","w").write("window.CRAWL_JUNK_RUNS="+json.dumps(r,separators=(",",":"))+";\n")'
 ```
 
-Readers tick which rules count as junk (three presets: the page rules, plus repeated n-grams on lines of 6+ words, every DCLM rule as written) and pick what a high score is: the training cut (fastText ≥ 0.018112), the run's own top 1/5/10%/half, or a fixed score at ClueWeb22's percentiles. The pies take each cycle's English share from every page (the text job, or Jerry's pipeline counts) and the junk split from the sample. On whole-page text DCLM's repetition and line rules mostly react to menus. `junkdata.py` and `junk.py`'s `pages.pkl` steps are the earlier three-cycle build, replaced by the jobs above.
+Readers tick which rules count as junk and pick what a high score is: the training cut (fastText ≥ 0.018112), the run's own top 1/5/10%/half, or a fixed score at ClueWeb22's percentiles. The tab opens with the default rules (DCLM's page rules and our two, pages under 10 words, repeated n-grams on lines of 6+ words on whole-page text, and repeated lines or paragraphs) and the run's own top 10% by fastText; the other presets are the page rules alone, the page rules plus repeated n-grams on lines of 6+ words, and every DCLM rule as written. The pies take each cycle's English share from every page (the text job, or Jerry's pipeline counts) and the junk split from the sample. On whole-page text DCLM's repetition and line rules mostly react to menus. `junkdata.py` and `junk.py`'s `pages.pkl` steps are the earlier three-cycle build, replaced by the jobs above.
 
 ## View it
 

@@ -31,6 +31,82 @@ const Junk = (() => {
   const index = (run, view) => (window.CRAWL_JUNKI || {})[`${run}/${view}`];
   const loadIndex = (run, view) => loadScript(`data/raw/junk/${run}/${view}/index.js`);
 
+  // Junk share over cycles for the ticked rules, from trend.js: each cycle's sampled pages counted by their rule results
+  // (junkpage.py rule_table). Returns undefined while it loads (then rerenders), null when the run has no such file.
+  const trendTried = new Set();
+  const trendTabs = new Map();
+  const trendCache = new Map();
+  const u32 = (b) => {
+    const out = new Uint32Array(b.length / 4);
+    for (let i = 0; i < out.length; i++) out[i] = (b[4 * i] | (b[4 * i + 1] << 8) | (b[4 * i + 2] << 16) | (b[4 * i + 3] << 24)) >>> 0;
+    return out;
+  };
+  function trendFor(run, view, I, rerender) {
+    const key = `${run}/${view}`;
+    const T = (window.CRAWL_JUNKT || {})[key];
+    if (!T) {
+      if (trendTried.has(key)) return null;
+      trendTried.add(key);
+      loadScript(`data/raw/junk/${run}/${view}/trend.js`).then(() => rerender());
+      return undefined;
+    }
+    if (!trendTabs.has(key)) {
+      const dec = (s) => (s ? u32(bytes(s)) : null);
+      trendTabs.set(key, T.tables.map((t) => ({ rk: dec(t.rk), rc: dec(t.rc), hk: dec(t.hk), hc: dec(t.hc) })));
+    }
+    // the high-score line: the pages over the cutoff picked under "High score =" (junkpage.py rule_table's hi options)
+    const hid = sel.hiCut === "train" ? `${srcKey()}:train` : `${srcKey()}:${sel.hiScore}:${sel.hiCut}`;
+    const ck = `${key}|${[...sel.items].sort().join(",")}|${sel.t}|${hid}`;
+    if (trendCache.has(ck)) return trendCache.get(ck);
+    // the same junk test as compute(): any ticked rule bit, or the n-gram rules at the chosen threshold
+    let M = 0;
+    I.rules.forEach((r, i) => { if (sel.items.has(r)) M |= 1 << i; });
+    const levels = !!I.has_rep;
+    const full = sel.items.has("ngram"), prose = levels && sel.items.has("ngram6");
+    if (full && !levels) M |= 1 << I.rules.indexOf("rep_ngram");
+    const need = THRESHOLDS.indexOf(sel.t) + 1; // how many of the thresholds a page's repetition level must exceed
+    const rate = (keys, counts) => {
+      if (!keys) return [null, 0];
+      let j = 0, n = 0;
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        n += counts[i];
+        if ((k & M) !== 0 || (levels && full && ((k >>> 13) & 7) >= need) || (prose && ((k >>> 16) & 7) >= need)) j += counts[i];
+      }
+      return [n < MIN_PAGES ? null : Math.round((1000 * j) / n) / 10, n];
+    };
+    const tabs = trendTabs.get(key);
+    const r = tabs.map((t) => rate(t.rk, t.rc));
+    // over the cutoff: the sample's high group weighs 1 and the rest 10 where the crawl has that group (as compute())
+    // each cutoff's counts are a file of their own (trend-hi/<id>.js), loaded the first time that cutoff is picked
+    const dkey = `${key}|${hid}`;
+    const H = (window.CRAWL_JUNKTH || {})[`${key}/${hid}`];
+    if (!H && (T.hi || []).includes(hid) && !trendTried.has(dkey)) {
+      trendTried.add(dkey);
+      loadScript(`data/raw/junk/${run}/${view}/trend-hi/${hid.replace(/:/g, "_")}.js`).then(() => rerender());
+    }
+    if (H && !trendTabs.has(dkey)) {
+      const dec = (s) => (s ? u32(bytes(s)) : null);
+      trendTabs.set(dkey, H.tables.map((e) => (e ? { k: dec(e.k), a: dec(e.a), b: dec(e.b) } : null)));
+    }
+    const wb = I.has_high ? 10 : 1;
+    const h = (trendTabs.get(dkey) || []).map((e) => {
+      if (!e) return [null, 0];
+      let j = 0, w = 0, n = 0;
+      for (let i = 0; i < e.k.length; i++) {
+        const k = e.k[i], a = e.a ? e.a[i] : 0, b = e.b ? e.b[i] : 0;
+        const wi = a + wb * b;
+        n += a + b;
+        w += wi;
+        if ((k & M) !== 0 || (levels && full && ((k >>> 13) & 7) >= need) || (prose && ((k >>> 16) & 7) >= need)) j += wi;
+      }
+      return [n < MIN_PAGES ? null : Math.round((1000 * j) / w) / 10, n];
+    });
+    const out = { cycles: T.cycles, random: r.map((x) => x[0]), n: r.map((x) => x[1]), high: h.some((x) => x[1]) ? h.map((x) => x[0]) : null };
+    if (H || !(T.hi || []).includes(hid)) trendCache.set(ck, out); // not while the cutoff's file is still loading
+    return out;
+  }
+
   const bytes = (s) => {
     const bin = atob(s);
     const a = new Uint8Array(bin.length);
@@ -65,9 +141,13 @@ const Junk = (() => {
   };
   const PAGE = ["length", "word_length", "symbols", "bullets", "ellipsis", "non_alpha_words", "stop_words", "low_vocab", "repeated_term"];
   // "ngram" = DCLM's repeated n-gram check on the whole text, "ngram6" = the same on lines of 6+ words only (whole page only)
+  // view: a preset only one text has (the main content has no 6+ word line check); trend: false = no per-cycle trend
+  // computed on the cluster for it. "def" / "defMain" are what the tab opens with (Shlok, 2026-11-26).
   const PRESETS = {
+    def: { label: "Default", items: [...PAGE, "under10", "ngram6", "rep_lines"], view: "nutch", trend: false, text: "The default: DCLM's page rules and our two, pages under 10 words, repeated n-grams on lines of 6+ words, and repeated lines or paragraphs" },
+    defMain: { label: "Default", items: [...PAGE, "under10", "rep_lines"], view: "resil", trend: false, text: "The default: DCLM's page rules and our two, pages under 10 words, and repeated lines or paragraphs (main-content text has no 6+ word line check)" },
     page: { label: "Page rules", items: PAGE, text: "DCLM's page rules (length, word length, symbols, bullets, ellipses, letterless words, stop words) and our two (low vocabulary, one repeated term)" },
-    prose: { label: "+ repetition in text", items: [...PAGE, "ngram6"], nutch: true, text: "The page rules, plus DCLM's repeated n-gram check run on lines of 6+ words only (menus and buttons left out)" },
+    prose: { label: "+ repetition in text", items: [...PAGE, "ngram6"], view: "nutch", text: "The page rules, plus DCLM's repeated n-gram check run on lines of 6+ words only (menus and buttons left out)" },
     dclm: { label: "DCLM as written", items: [...PAGE, "ngram", "rep_lines", "line_removal"], text: "Every DCLM-Baseline rule as written, plus our two" },
   };
   const SETS = [
@@ -88,7 +168,9 @@ const Junk = (() => {
   const BANDS = ["0–50", "50–70", "70–80", "80–90", "90–95", "95–98", "98–99", "99–100"];
   // the page's own cycle and per-cycle / cumulative choice pick the cycles (ctx.cycle, ctx.cum)
   // bandScale: score bands as percentiles within this run ("own") or on ClueWeb22's table ("cw")
-  const sel = { items: new Set(PRESETS.page.items), t: 1, view: "nutch", src: null, trend: null, hiScore: "fasttext", hiCut: "train", bandScale: "own" };
+  const sel = { items: new Set(PRESETS.def.items), t: 1, view: "nutch", src: null, trend: null, hiScore: "fasttext", hiCut: "own10", bandScale: "own" };
+  const DEFAULT = { nutch: "def", resil: "defMain" };
+  const presetsFor = (view) => Object.keys(PRESETS).filter((k) => !PRESETS[k].view || PRESETS[k].view === view);
   const HI_SCORES = { fasttext: "fastText", edu: "FineWeb-Edu", combined: "Page score" };
   const SCORE_WORD = { fasttext: "fastText", edu: "FineWeb-Edu", combined: "page score" };
   // "High score" cutoffs: the training cut; this run's own top 1/5/10/50% ("own<n>"); a fixed score at ClueWeb22's top
@@ -129,26 +211,33 @@ const Junk = (() => {
   let urlRead = false;
 
   const sameSet = (a, b) => a.size === b.length && b.every((x) => a.has(x));
-  const presetOf = () => (sel.t === 1 ? Object.keys(PRESETS).find((k) => sameSet(sel.items, PRESETS[k].items)) : undefined);
+  const presetOf = () => (sel.t === 1 ? presetsFor(sel.view).find((k) => sameSet(sel.items, PRESETS[k].items)) : undefined);
   function setPreset(k) {
     sel.items = new Set(PRESETS[k].items);
     sel.t = 1;
   }
   // Only the whole-page view has repetition levels: the main-content view has no n-gram threshold or 6+ word lines.
-  function fitView() {
+  // switched: the reader just changed the text, so the default rules follow to the other text's default.
+  function fitView(switched) {
+    if (switched && sel.t === 1) {
+      const other = DEFAULT[sel.view === "resil" ? "nutch" : "resil"];
+      if (sameSet(sel.items, PRESETS[other].items)) return setPreset(DEFAULT[sel.view]);
+    }
     if (sel.view !== "resil") return;
+    if (sel.t === 1 && sameSet(sel.items, PRESETS.def.items)) return setPreset("defMain");
     sel.items.delete("ngram6");
     sel.t = 1;
-    if (!sel.items.size) setPreset("page");
+    if (!sel.items.size) setPreset(DEFAULT.resil);
   }
   // Kept in the link: the rule choice (a preset by name, or its rules and "t1.5" for a looser n-gram threshold), then
   // "resil" for the main-content view, "crawler" / "main" for its score source and "hi-<score>-<cut>" for the pies'
   // high score. The cycle and per-cycle / cumulative are the page's own (run, cycle, view in the link).
   function param() {
     const extra = [sel.view === "resil" && "resil", sel.src && sel.view === "resil" && sel.src,
-      (sel.hiScore !== "fasttext" || sel.hiCut !== "train") && `hi-${sel.hiScore}-${sel.hiCut}`, sel.bandScale === "cw" && "cwbands"].filter(Boolean);
+      (sel.hiScore !== "fasttext" || sel.hiCut !== "own10") && `hi-${sel.hiScore}-${sel.hiCut}`, sel.bandScale === "cw" && "cwbands"].filter(Boolean);
     const p = presetOf();
-    const rules = p ? (p === "page" && !extra.length ? [] : [p]) : [...ITEMS.filter((k) => sel.items.has(k)), ...(sel.t !== 1 ? [`t${sel.t}`] : [])];
+    // the default rules need no token: a link without rules opens with them
+    const rules = p ? (p === DEFAULT[sel.view] ? [] : [p]) : [...ITEMS.filter((k) => sel.items.has(k)), ...(sel.t !== 1 ? [`t${sel.t}`] : [])];
     if (!p && !rules.length) rules.push("none");
     return [...rules, ...extra].join(",");
   }
@@ -176,12 +265,15 @@ const Junk = (() => {
   }
 
   // ---- Rates for the chosen rules -----------------------------------------------------------------------------------
-  const GROUPS = ["random", "any", "comb", "ft_only", "edu_only", "both", "ft_top1", "edu_top1", "prio_top1"];
-  const GROUP_LABEL = {
-    random: "Random pages", any: "Any high score", comb: "Page score ≥ 0.95", ft_only: "fastText ≥ 0.5 only", edu_only: "FineWeb-Edu ≥ 0.6 only",
-    both: "Both high", ft_top1: "fastText top 1%", edu_top1: "FineWeb-Edu top 1%", prio_top1: "Priority top 1%",
-  };
-  const REP_GROUPS = ["random", "any", "comb", "ft_top1", "edu_top1"];
+  // Every "high" group follows the "High score =" selection: hi = the selected score over the selected cutoff; ft_hi /
+  // edu_hi / comb_hi = each score over the same kind of cutoff (not with the training cut, which only fastText has);
+  // both / ft_only / edu_only split fastText and FineWeb-Edu by it. Top 1% rows follow the Score bands switch.
+  const GROUPS = ["random", "hi", "ft_hi", "edu_hi", "comb_hi", "both", "ft_only", "edu_only", "ft_top1", "edu_top1", "prio_top1"];
+  const GROUP_LABEL = { random: "Random pages", ft_top1: "fastText top 1%", edu_top1: "FineWeb-Edu top 1%", prio_top1: "Priority top 1%" };
+  const REP_GROUPS = ["random", "hi", "ft_top1", "edu_top1"];
+  const groupRows = (I) => (cutOf(I).kind === "train" ? ["random", "hi", "ft_top1", "edu_top1", "prio_top1"]
+    : ["random", "ft_hi", "edu_hi", "comb_hi", "both", "ft_only", "edu_only", "ft_top1", "edu_top1", "prio_top1"]);
+  const HI_GROUP = { fasttext: "ft_hi", edu: "edu_hi", combined: "comb_hi" };
   const REPS = [1, 1.5, 2, 3];
   const MIN_PAGES = 30; // fewer sampled pages show no value
   const cache = new Map();
@@ -231,7 +323,6 @@ const Junk = (() => {
     const pieA = { n: 0, hi: 0, lo: 0, bot: 0 };
     const BOT = 1 << 15;
     const pieC = { n: 0, w: 0, jw: 0, kind: new Float64Array(KINDS.length) }; // high-score pages
-    const shift = main ? 5 : 2;
     const hasHigh = I.has_high;
     const nr = rules.length;
     const nk = KINDS.length;
@@ -261,8 +352,6 @@ const Junk = (() => {
           if ((mask & kindMask[k]) !== 0 || (k === repK && repHit)) { kind = k; break; }
         }
       }
-      const cut = (f >> shift) & 7, ft = cut & 1, edu = cut & 2, comb = cut & 4;
-      const high = hasHigh ? f & 2 : cut !== 0;
       const w = hasHigh && !(f & 2) ? 10 : 1;
       const hb = (hBands[i] >> (4 * hk)) & 15;
       const pieHigh = hTrain ? (mask & hBit) !== 0 : hb <= 7 && hb >= hBand;
@@ -280,12 +369,20 @@ const Junk = (() => {
           if (kind >= 0) pieC.kind[kind] += w;
         }
       }
-      if (high) {
-        add(G.any, junk, 1, mask, qf, qp);
-        if (comb) add(G.comb, junk, 1, mask, qf, qp);
-        if (ft && !edu) add(G.ft_only, junk, 1, mask, qf, qp);
-        if (edu && !ft) add(G.edu_only, junk, 1, mask, qf, qp);
-        if (ft && edu) add(G.both, junk, 1, mask, qf, qp);
+      // the selected high score, and each score over the same kind of cutoff, weighted as sampled
+      if (pieHigh) add(G.hi, junk, w, mask, qf, qp);
+      if (!hTrain) {
+        const over = (k) => {
+          const b = (hBands[i] >> (4 * k)) & 15;
+          return b <= 7 && b >= hBand;
+        };
+        const fh = over(0), eh = over(1);
+        if (fh) add(G.ft_hi, junk, w, mask, qf, qp);
+        if (eh) add(G.edu_hi, junk, w, mask, qf, qp);
+        if (over(2)) add(G.comb_hi, junk, w, mask, qf, qp);
+        if (fh && eh) add(G.both, junk, w, mask, qf, qp);
+        else if (fh) add(G.ft_only, junk, w, mask, qf, qp);
+        else if (eh) add(G.edu_only, junk, w, mask, qf, qp);
       }
       const b4 = bands[i];
       for (let k = 0; k < 4; k++) {
@@ -333,8 +430,33 @@ const Junk = (() => {
         cw: "The page score is the average of the two percentiles, the combined score 233150 ranks by." } },
     { key: "priority", title: "Junk share by priority", x: { own: "Priority percentile within the cycle", cw: "Priority percentile within the cycle" }, foot: { own: "", cw: "" } },
   ];
-  const groupLabel = (g, scale) => (g === "ft_top1" || g === "edu_top1"
-    ? `${g === "ft_top1" ? "fastText" : "FineWeb-Edu"} top 1%${scale === "own" ? " of this run" : " of ClueWeb22"}` : GROUP_LABEL[g]);
+  // The selected high score in a few words, and each group's label (the "high" ones say the cutoff they use).
+  function hiShort(I) {
+    const x = cutOf(I);
+    if (x.kind === "train") return "fastText ≥ 0.018112 (the training cut)";
+    if (x.kind === "own") return `${SCORE_WORD[sel.hiScore]} top ${topWord(x.n)} of this run`;
+    return sel.hiScore === "combined" ? `page score ≥ ${x.thr.toFixed(2)}` : `${HI_SCORES[sel.hiScore]} in ClueWeb22's top ${topWord(x.n)}`;
+  }
+  // Short labels (the bar lists truncate long ones); the chart's subtitle says which scale ("of this run" / ClueWeb22).
+  function groupLabel(g, scale, I) {
+    if (g === "ft_top1" || g === "edu_top1") return `${g === "ft_top1" ? "fastText" : "FineWeb-Edu"} top 1%`;
+    if (g === "hi") return `High score: ${hiShort(I)}`;
+    const x = cutOf(I);
+    const top = `top ${topWord(x.n)}`;
+    if (g === "ft_hi") return `fastText ${top}`;
+    if (g === "edu_hi") return `FineWeb-Edu ${top}`;
+    if (g === "comb_hi") return x.kind === "cw" ? `Page score ≥ ${cutOf(I, x.kind + x.n, "combined").thr.toFixed(2)}` : `Page score ${top}`;
+    if (g === "both") return "Both fastText and FineWeb-Edu";
+    if (g === "ft_only") return "fastText only";
+    if (g === "edu_only") return "FineWeb-Edu only";
+    return GROUP_LABEL[g];
+  }
+  // what the group chart's "top x%" means, for its subtitle
+  const groupScale = (I, scale) => {
+    const x = cutOf(I);
+    const hi = x.kind === "train" ? "" : `high = ${x.kind === "own" ? `the top ${topWord(x.n)} of this run` : `ClueWeb22's top ${topWord(x.n)}`} on each score (both / only: fastText and FineWeb-Edu); `;
+    return `${hi}top 1% = ${scale === "own" ? "of this run" : "of ClueWeb22"}`;
+  };
 
   // The training cut is fastText's; a run with no own percentile for a score (too few scored pages) falls back to
   // ClueWeb22's cutoff, and to ClueWeb22's bands when its page files predate the own bands.
@@ -392,7 +514,7 @@ const Junk = (() => {
       if (!views.includes(v)) continue;
       viewSeg.append(ctx.button({ id: `junk-v-${v}`, "aria-pressed": String(v === sel.view), text: VIEWS[v].label }, () => {
         sel.view = v;
-        fitView();
+        fitView(true);
         changed(`junk-v-${v}`);
       }));
     }
@@ -414,8 +536,7 @@ const Junk = (() => {
 
     // Presets, then one box per rule.
     const seg = html("div", { class: "seg", role: "group", "aria-label": "Junk rule presets" });
-    for (const k of Object.keys(PRESETS)) {
-      if (PRESETS[k].nutch && sel.view !== "nutch") continue;
+    for (const k of presetsFor(sel.view)) {
       seg.append(ctx.button({ id: `junk-p-${k}`, "aria-pressed": String(k === preset), text: PRESETS[k].label }, () => {
         setPreset(k);
         changed(`junk-p-${k}`);
@@ -567,6 +688,63 @@ const Junk = (() => {
       }
       box.append(pies);
     }
+    // Compare mode: the same pie for each compared run, from that run's own sample with the same text, rules and kind
+    // of cutoff (its own top 1% with "of this run"), and its own English share.
+    const cmp = ctx.compare || [];
+    if (cmp.length) {
+      const row = html("div", { class: "grid" });
+      for (const c of cmp) row.append(comparePie(c));
+      box.append(html("h3", { class: "subhead", text: "Compared runs: where every crawled page goes" }), row);
+    }
+    function comparePie(c) {
+      const quiet = (text) => html("p", { class: "empty", text: `${c.label}: ${text}` });
+      if (!(runs()[c.id] || []).includes(sel.view)) return quiet(`no ${VIEWS[sel.view].label.toLowerCase()} sample.`);
+      const I2 = index(c.id, sel.view);
+      if (I2 === undefined) {
+        loadIndex(c.id, sel.view).then(() => ctx.rerender());
+        return quiet("loading…");
+      }
+      const last2 = I2.cycles.at(-1);
+      if (!(cum ? I2.cycles[0] <= N : I2.cycles.includes(N))) return quiet(`no sample for cycle ${N}.`);
+      const file2 = cum ? "all" : N;
+      const key2 = `${c.id}/${sel.view}/${file2}`;
+      if (!pages.has(key2)) {
+        pages.set(key2, undefined);
+        loadPages(c.id, sel.view, file2).then(() => ctx.rerender());
+      }
+      const P2 = pages.get(key2);
+      if (!P2) return quiet(P2 === null ? "its sample couldn't be loaded." : "loading…");
+      // a run without the crawler's scores uses the main-content ones, as it would if it were open
+      const keep = sel.src;
+      if (sel.view === "resil" && sel.src === "crawler" && !I2.crawler_scores) sel.src = "main";
+      try {
+        const A2 = compute(key2, P2, I2, cum && N < last2 ? N : null).pieA;
+        if (A2.n < MIN_PAGES) return quiet(`too few sampled pages.`);
+        const v = (k) => (ctx.valueAtRun ? ctx.valueAtRun(c.id, k, N) : null);
+        const ne = sel.view === "nutch" ? null : v(cum ? "pipeline/not_english_pct_cumulative" : "pipeline/not_english_pct");
+        const E2 = sel.view === "nutch" ? v(cum ? "text/english_pct_cumulative" : "text/english_pct") : ne == null ? null : 100 - ne;
+        const total2 = sel.view === "nutch" ? v(cum ? "text/pages_parsed_cumulative" : "text/pages_parsed") : v(cum ? "pipeline/docs_cumulative" : "pipeline/docs");
+        const eng = E2 == null ? 100 : E2;
+        const up = Math.min(N, last2);
+        const where2 = cum ? (I2.cycles[0] === up ? `Cycle ${up}` : `Cycles ${I2.cycles[0]}–${up}`) : `Cycle ${N}`;
+        const slices = [
+          { label: "English, not junk", value: (eng * (A2.n - A2.hi - A2.lo - A2.bot)) / A2.n, slot: 1 },
+          { label: `Junk, ${hiCmp(I2, "<")}`, value: (eng * A2.lo) / A2.n, slot: 4 },
+          { label: `Junk, ${hiCmp(I2, "≥")}`, value: (eng * A2.hi) / A2.n, slot: 8 },
+          ...(A2.bot ? [{ label: "Bot-check pages (junk, no score)", value: (eng * A2.bot) / A2.n, slot: 7 }] : []),
+          ...(E2 == null ? [] : [{ label: sel.view === "nutch" ? "Not English" : "Not English or no main text", value: 100 - E2, slot: "muted" }]),
+        ];
+        const center = total2 != null && E2 != null ? `<b>${F.count(total2)}</b><br>pages` : "";
+        return card({
+          title: c.label, sub: `${where2} · ${E2 == null ? "English pages only (no English share for this cycle)" : "every page with text"}`, height: 300,
+          draw: (h) => Charts.pie(h, { name: c.label, slices: slices.filter((s) => s.value != null && s.value > 0), height: 300, center }),
+          table: () => ({ columns: ["Slice", "% of pages"], rows: slices.map((s) => [s.label, pct(s.value == null ? null : Math.round(s.value * 10) / 10)]) }),
+          foot: `High score = ${hiText(I2)}. From ${F.count(A2.n)} sampled English pages of this run.`,
+        });
+      } finally {
+        sel.src = keep;
+      }
+    }
     // Main content: Jerry's exact counts over every page, with his rules, dedup and fastText cut (from the page)
     if (ctx.exact) {
       const ex = ctx.exact(sel.view);
@@ -589,25 +767,42 @@ const Junk = (() => {
       : `${where}: ${F.count(nPages)} English pages sampled` + (cum ? `; the charts use a uniform subsample of them (${F.count(I.pooled)} pooled over all ${I.cycles.length} cycles).` : ".");
     box.append(html("p", { class: "blurb", text: `Sampled: ${sample}. ${pagesIn}` + (sel.view === "nutch" ? " Rates are weighted by how pages were sampled, so they stand for the whole cycle." : "") }));
 
-    // Junk over cycles: computed on the cluster for each preset and each rule (custom rule sets need the per-page data)
-    const trendKeys = [...Object.keys(PRESETS).filter((k) => !PRESETS[k].nutch || sel.view === "nutch"), ...RULE_ROWS];
-    if (!trendKeys.includes(sel.trend)) sel.trend = preset && trendKeys.includes(preset) ? preset : "page";
-    const tsel = html("select", { id: "junk-trend", "aria-label": "Rules in the chart over cycles" });
-    for (const k of trendKeys) tsel.append(html("option", { value: k, selected: k === sel.trend, text: PRESETS[k] ? `Preset: ${PRESETS[k].label}` : LABEL[k] }));
-    tsel.addEventListener("change", () => {
-      sel.trend = tsel.value;
-      changed("junk-trend");
-    });
-    const tg = [["random", sel.view === "nutch" ? "Random pages" : "Sampled pages", 1], ...(I.has_high ? [["high", "High-score pages", 2]] : [])];
-    const tseries = tg.filter(([g]) => I.trend[g]).map(([g, label, slot]) => ({ label, slot, values: I.trend[g][sel.trend] }));
-    box.append(card({
-      title: "Junk share over cycles", sub: `% of pages failing ${PRESETS[sel.trend] ? `the “${PRESETS[sel.trend].label}” preset` : `“${LABEL[sel.trend]}”`}, each cycle`, height: 280,
-      tool: html("label", { class: "field", for: "junk-trend" }, "Rules", tsel),
-      draw: (h) => Charts.line(h, { name: "Junk share per cycle", x: I.cycles, series: tseries, unit: "pct", fmt: F.pct, height: 280, legend: true, xTitle: "Cycle", selectedX: N }),
-      table: () => ({ columns: ["Cycle", ...tseries.map((s) => s.label), "Pages"], rows: I.cycles.map((c, i) => [String(c), ...tseries.map((s) => pct(s.values[i])), F.count(I.trend.random.n[i])]) }),
-      foot: "Computed on the cluster from every sampled page, for each preset and each rule on its own; custom rule sets show in the charts below." +
-        (sel.view === "nutch" && I.has_high ? " Random pages stand for the whole cycle; high-score pages are every page over a score cutoff." : ""),
-    }));
+    // Junk over cycles, for the ticked rules and n-gram threshold: from each cycle's rule table (trend.js), which counts
+    // every sampled page by its rule results. Compare mode adds each compared run's line in its own color.
+    const tr = trendFor(ctx.run, sel.view, I, ctx.rerender);
+    const cmpTrend = (ctx.compare || []).map((c) => {
+      const I2 = (runs()[c.id] || []).includes(sel.view) ? index(c.id, sel.view) : null;
+      const t2 = I2 ? trendFor(c.id, sel.view, I2, ctx.rerender) : null;
+      return t2 ? { c, t: t2 } : null;
+    }).filter(Boolean);
+    const rulesSaid = preset ? `the “${PRESETS[preset].label}” rules` : "the ticked rules";
+    if (!tr) {
+      box.append(html("p", { class: "empty", text: tr === null ? "The per-cycle counts for this run aren't built yet." : "Loading the junk share over cycles…" }));
+    } else {
+      const groups = [["random", sel.view === "nutch" ? "Random pages" : "Sampled pages"], ...(tr.high ? [["high", `High score: ${hiShort(I)}`]] : [])];
+      let tx = tr.cycles;
+      let tseries = groups.map(([g, label], k) => ({ label, slot: k + 1, values: tr[g] }));
+      if (cmpTrend.length) {
+        tx = [...new Set([...tr.cycles, ...cmpTrend.flatMap(({ t }) => t.cycles)])].sort((a, b) => a - b);
+        const onX = (cycles, vals) => {
+          const m = new Map(cycles.map((c, i) => [c, vals[i]]));
+          return tx.map((c) => (m.has(c) ? m.get(c) : null));
+        };
+        tseries = [
+          ...groups.map(([g, label], k) => ({ label: `${ctx.label} · ${label.toLowerCase()}`, slot: ctx.slot, dash: k ? "dot" : "solid", values: onX(tr.cycles, tr[g]) })),
+          ...cmpTrend.map(({ c, t }) => ({ label: `${c.label} · ${sel.view === "nutch" ? "random" : "sampled"} pages`, slot: c.slot, values: onX(t.cycles, t.random) })),
+        ];
+      }
+      box.append(card({
+        title: "Junk share over cycles", sub: `% of pages failing ${rulesSaid}, each cycle`, height: 280,
+        draw: (h) => Charts.line(h, { name: "Junk share per cycle", x: tx, series: tseries, unit: "pct", fmt: F.pct, height: 280, legend: true, xTitle: "Cycle", selectedX: N }),
+        table: () => (cmpTrend.length
+          ? { columns: ["Cycle", ...tseries.map((s) => s.label)], rows: tx.map((c, i) => [String(c), ...tseries.map((s) => pct(s.values[i]))]) }
+          : { columns: ["Cycle", ...tseries.map((s) => s.label), "Pages"], rows: tr.cycles.map((c, i) => [String(c), ...tseries.map((s) => pct(s.values[i])), F.count(tr.n[i])]) }),
+        foot: "From every sampled page of each cycle, for whatever rules are ticked above (and the n-gram threshold)." +
+          (tr.high ? ` Random pages stand for the whole cycle; the high-score line is the pages with ${hiShort(I)}, weighted by how they were sampled.` : ""),
+      }));
+    }
 
     if (!sampled || !P) {
       box.append(notReady());
@@ -648,38 +843,42 @@ const Junk = (() => {
     }
 
     // Junk share by score group, against random pages.
-    const rows = GROUPS.map((g) => ({ label: g === "random" && sel.view !== "nutch" ? "Sampled pages" : groupLabel(g, scale), value: V.groups[g].v, extras: [F.count(V.groups[g].n)], muted: g === "random" }));
+    const gRows = groupRows(I);
+    const rows = gRows.map((g) => ({ label: g === "random" && sel.view !== "nutch" ? "Sampled pages" : groupLabel(g, scale, I), value: V.groups[g].v,
+      extras: [F.count(V.groups[g].n)], muted: g === "random", strong: g === HI_GROUP[sel.hiScore] }));
     grid.append(card({
-      title: "Junk share by how the page scored", sub: `${where}; the mark is the share among ${sel.view === "nutch" ? "random" : "all sampled"} pages`, height: 300,
+      title: "Junk share by how the page scored", sub: `${where}; ${groupScale(I, scale)}; the mark is the share among ${sel.view === "nutch" ? "random" : "all sampled"} pages`, height: 300,
       draw: (h) => Charts.bars(h, { rows, fmt: F.pct, labelHead: "Pages", valueHead: "Junk", extras: ["Pages sampled"], ref: { value: V.groups.random.v, label: sel.view === "nutch" ? "Random pages" : "Sampled pages" } }),
-      table: () => ({ columns: ["Pages", "Junk", "Pages sampled"], rows: rows.map((r, i) => [r.label, pct(V.groups[GROUPS[i]].v), F.count(V.groups[GROUPS[i]].n)]) }),
-      foot: "“Only” = high on one score and under the other's cutoff; both high = fastText ≥ 0.5 and FineWeb-Edu ≥ 0.6. " +
+      table: () => ({ columns: ["Pages", "Junk", "Pages sampled"], rows: rows.map((r, i) => [r.label, pct(V.groups[gRows[i]].v), F.count(V.groups[gRows[i]].n)]) }),
+      foot: (cutOf(I).kind === "train" ? "The training cut is fastText's alone, so the score-by-score rows need a top-percent cutoff (High score above). "
+        : "Each score over the kind of cutoff picked under High score above; the bold row is the picked score. ") +
         (scale === "own" ? "fastText and FineWeb-Edu top 1% = this run's top 1% of English pages" : "fastText and FineWeb-Edu top 1% = ClueWeb22's top 1% (about 0.2% of an OPIC crawl's pages)") +
-        " (switch with Score bands above); priority top 1% = within the cycle.",
+        " (Score bands above); priority top 1% = within the cycle." + (sel.view === "nutch" && I.has_high ? " Pages are weighted by how they were sampled." : ""),
     }));
 
-    // Which rules fire, each on its own: high-score pages, with random pages beside them. Grey = not ticked.
+    // Which rules fire, each on its own: the selected high-score pages, with random pages beside them. Grey = not ticked.
     const ticked = (r) => (r === "rep_ngram" ? sel.items.has("ngram") || sel.items.has("ngram6") : sel.items.has(r));
-    const total = { label: "Any ticked rule (junk)", value: V.groups.any.v, extras: [pct(V.groups.random.v)], strong: true };
-    const ruleRows = [total, ...RULE_ROWS.map((r) => ({ label: LABEL[r], value: V.groups.any.rules[r], muted: !ticked(r), extras: [pct(V.groups.random.rules[r])] }))];
+    const hiHead = `High score (${hiShort(I)})`;
+    const total = { label: "Any ticked rule (junk)", value: V.groups.hi.v, extras: [pct(V.groups.random.v)], strong: true };
+    const ruleRows = [total, ...RULE_ROWS.map((r) => ({ label: LABEL[r], value: V.groups.hi.rules[r], muted: !ticked(r), extras: [pct(V.groups.random.rules[r])] }))];
     grid.append(card({
-      title: "Which rules the pages fail", sub: `${where}: % of high-score and of ${sel.view === "nutch" ? "random" : "all sampled"} pages failing any ticked rule (top row), then each rule on its own`, height: 380,
-      draw: (h) => Charts.bars(h, { rows: ruleRows, fmt: F.pct, labelHead: "Rule", valueHead: "High-score pages", extras: [sel.view === "nutch" ? "Random" : "All sampled"] }),
-      table: () => ({ columns: ["Rule", "Counted", "High-score pages", sel.view === "nutch" ? "Random pages" : "All sampled pages", groupLabel("ft_top1", scale), groupLabel("edu_top1", scale), "Priority top 1%"],
-        rows: [["Any ticked rule (junk)", "", pct(V.groups.any.v), pct(V.groups.random.v), pct(V.groups.ft_top1.v), pct(V.groups.edu_top1.v), pct(V.groups.prio_top1.v)],
-          ...RULE_ROWS.map((r) => [LABEL[r], ticked(r) ? "yes" : "no", pct(V.groups.any.rules[r]), pct(V.groups.random.rules[r]), pct(V.groups.ft_top1.rules[r]), pct(V.groups.edu_top1.rules[r]), pct(V.groups.prio_top1.rules[r])])] }),
+      title: "Which rules the pages fail", sub: `${where}: % of pages with ${hiShort(I)} and of ${sel.view === "nutch" ? "random" : "all sampled"} pages failing any ticked rule (top row), then each rule on its own`, height: 380,
+      draw: (h) => Charts.bars(h, { rows: ruleRows, fmt: F.pct, labelHead: "Rule", valueHead: "High score", extras: [sel.view === "nutch" ? "Random" : "All sampled"] }),
+      table: () => ({ columns: ["Rule", "Counted", hiHead, sel.view === "nutch" ? "Random pages" : "All sampled pages", groupLabel("ft_top1", scale, I), groupLabel("edu_top1", scale, I), "Priority top 1%"],
+        rows: [["Any ticked rule (junk)", "", pct(V.groups.hi.v), pct(V.groups.random.v), pct(V.groups.ft_top1.v), pct(V.groups.edu_top1.v), pct(V.groups.prio_top1.v)],
+          ...RULE_ROWS.map((r) => [LABEL[r], ticked(r) ? "yes" : "no", pct(V.groups.hi.rules[r]), pct(V.groups.random.rules[r]), pct(V.groups.ft_top1.rules[r]), pct(V.groups.edu_top1.rules[r]), pct(V.groups.prio_top1.rules[r])])] }),
       foot: "The top row is the junk share for the ticked rules; a page can fail several rules, so the rows below add up to more. Each rule is at DCLM's thresholds; grey bars are rules not ticked. Repeated n-grams here are on the whole text at DCLM's threshold.",
     }));
 
     // Repetition at DCLM's threshold and looser (whole page only: the main-content sample has no repetition levels).
     if (sel.view === "nutch" && P.qfull) {
-      const repSeries = REP_GROUPS.map((g, k) => ({ label: groupLabel(g, scale), values: REPS.map((t) => V.groups[g].rep[t]), slot: k + 1 }));
+      const repSeries = REP_GROUPS.map((g, k) => ({ label: groupLabel(g, scale, I), values: REPS.map((t) => V.groups[g].rep[t]), slot: k + 1 }));
       grid.append(card({
         title: "Repeated n-grams at looser thresholds", sub: `${where}: % of pages over Gopher's n-gram limits, whole text`, height: 270,
         draw: (h) => Charts.line(h, { name: "Repeated n-grams by threshold", x: ["×1", "×1.5", "×2", "×3"], series: repSeries, unit: "pct", fmt: F.pct, height: 270, legend: true, xTitle: "Threshold, as a multiple of DCLM's (×1 = DCLM's own)" }),
         table: () => ({ columns: ["Pages", "×1 (DCLM)", "×1.5", "×2", "×3", "6+ word lines, ×1"],
-          rows: REP_GROUPS.map((g) => [groupLabel(g, scale), ...REPS.map((t) => pct(V.groups[g].rep[t])), pct(V.groups[g].rep.prose)]) }),
-        foot: `On lines of 6+ words only, at DCLM's threshold: ${REP_GROUPS.map((g) => `${groupLabel(g, scale)} ${pct(V.groups[g].rep.prose)}`).join(", ")}.`,
+          rows: REP_GROUPS.map((g) => [groupLabel(g, scale, I), ...REPS.map((t) => pct(V.groups[g].rep[t])), pct(V.groups[g].rep.prose)]) }),
+        foot: `On lines of 6+ words only, at DCLM's threshold: ${REP_GROUPS.map((g) => `${groupLabel(g, scale, I)} ${pct(V.groups[g].rep.prose)}`).join(", ")}.`,
       }));
     }
     box.append(grid);
@@ -697,8 +896,11 @@ const Junk = (() => {
           html("td", { text: v(e.edu) }), html("td", { text: v(e.combined) }), html("td", { text: v(e.priority_pct) }));
       });
       box.append(html("figure", { class: "card" },
-        html("div", { class: "card-head" }, html("div", {}, html("h3", { text: "Examples: high-score pages that fail a page rule" }),
-          html("p", { class: "sub", text: `Picked at random across every cycle, three per rule${sel.view === "resil" ? "; scores on the main content" : ""}. Not every one is a bad page.` }))),
+        html("div", { class: "card-head" }, html("div", {}, html("h3", { text: "Examples: high-scoring pages that fail a page rule" }),
+          html("p", { class: "sub", text: "Picked once on the cluster, at random across every cycle, three per rule, among " +
+            (sel.view === "nutch" && I.has_high ? "the pages sampled for a high score (page score ≥ 0.95, fastText ≥ 0.5 or FineWeb-Edu ≥ 0.6)"
+              : `pages with page score ≥ 0.95${sel.view === "resil" ? " on the main content" : ""}`) +
+            ". A fixed list: it doesn't change with the rules or the High score picked above. Not every one is a bad page." }))),
         html("div", { class: "tbl-wrap" }, html("table", { class: "data junk-ex" }, html("thead", {}, head), html("tbody", {}, ...body)))));
     }
     return box;

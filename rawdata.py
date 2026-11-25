@@ -8,6 +8,8 @@ urls/*.tsv.gz, fetch_not_ok/*.tsv.gz). Output, all as script files so the page a
     <out>/<run>.js                 cycle summaries and the cross-cycle series
     <out>/<run>/domains-c<N>.js    one row per domain with 3+ pages
     <out>/<run>/ex-c<N>/<name>.js  example pages with their text: one file per domain, plus _cycle.js for the whole cycle
+    <out>/<run>/ex-c<N>/p<KK>.js   with --packs K: the per-domain example pages in K files instead, each domain in file
+                                   fnv1a32(domain, UTF-8) % K (raw.js computes the same), for hosts that limit file counts
 The data is not committed; see README (Publishing).
 """
 import argparse
@@ -31,6 +33,25 @@ def js(path, name, key, obj):
         f.write(f"window.{name}=window.{name}||{{}};window.{name}[{json.dumps(key)}]=")
         json.dump(obj, f, separators=(",", ":"), allow_nan=False)
         f.write(";\n")
+
+
+def js_many(path, name, items):
+    """Several keys of one window object in one script file: [(key, obj), ...]."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(f"window.{name}=window.{name}||{{}};\n")
+        for key, obj in items:
+            f.write(f"window.{name}[{json.dumps(key)}]=")
+            json.dump(obj, f, separators=(",", ":"), allow_nan=False)
+            f.write(";\n")
+
+
+def pack_of(domain, packs):
+    """Which pack file holds a domain's example pages: 32-bit FNV-1a of its UTF-8 bytes, mod packs (raw.js: packOf)."""
+    h = 0x811C9DC5
+    for b in domain.encode("utf-8"):
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h % packs
 
 
 def clean(v, nd=4):
@@ -120,7 +141,8 @@ def cause(r, lang=True):
     return ", ".join(out)
 
 
-def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True, write_examples=True):
+def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True, write_examples=True,
+                packs=None):
     """max_domains keeps only that many domains (most HTTP 200s first, plus every example domain) in the cycle's domain
     table; the cycle's own numbers still use every domain. text_chars cuts example texts (chars keeps the full length).
     Without examples the cycle keeps only its whole-cycle example pages (the few dozen picked over every domain), not
@@ -150,8 +172,15 @@ def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with
                     examples.setdefault(e["target"], []).append({**e, "groups": own})
                 if glob_:
                     whole.append({**e, "groups": glob_})
-        for dom, rows in examples.items():
-            js(f"{out}/{run}/ex-c{cycle}/{safe_name(dom)}.js", "CRAWL_RAW_EX", f"{run}/{cycle}/{dom}", rows)
+        if packs:
+            by_pack = {}
+            for dom, rows in examples.items():
+                by_pack.setdefault(pack_of(dom, packs), []).append((f"{run}/{cycle}/{dom}", rows))
+            for k, items in by_pack.items():
+                js_many(f"{out}/{run}/ex-c{cycle}/p{k:02d}.js", "CRAWL_RAW_EX", items)
+        else:
+            for dom, rows in examples.items():
+                js(f"{out}/{run}/ex-c{cycle}/{safe_name(dom)}.js", "CRAWL_RAW_EX", f"{run}/{cycle}/{dom}", rows)
         js(f"{out}/{run}/ex-c{cycle}/_cycle.js", "CRAWL_RAW_EX", f"{run}/{cycle}/", whole)
 
     d["has_ex"] = d.domain.isin(examples.keys()).astype(int)
@@ -236,14 +265,16 @@ def main():
     ap.add_argument("--no-examples", action="store_true",
                     help="write no example pages (they don't fit the site's size limit); the page says they're left out")
     ap.add_argument("--procs", type=int, default=1, help="cycles built at once")
+    ap.add_argument("--packs", type=int, default=None,
+                    help="write each cycle's per-domain example pages into this many files (by a hash of the domain)")
     a = ap.parse_args()
     lo, _, hi = a.cycles.partition("-")
     cycles = [c for c in range(int(lo), int(hi or lo) + 1) if os.path.exists(f"{a.src}/{a.prefix}-c{c}/DONE")]
     if not cycles:
         sys.exit(f"No finished cycles for {a.prefix} in {a.src}")
     ex_cycles = [int(c) for c in a.example_cycles.split(",")] if a.example_cycles else cycles
-    jobs = [(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out, a.max_domains, a.text_chars, c in ex_cycles, not a.no_examples)
-            for c in cycles]
+    jobs = [(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out, a.max_domains, a.text_chars, c in ex_cycles, not a.no_examples,
+             a.packs) for c in cycles]
     if a.procs > 1:
         from multiprocessing import Pool
         with Pool(a.procs) as pool:
@@ -256,7 +287,9 @@ def main():
                                 + ("." if a.no_examples else ", plus every domain with example pages."))
     if a.no_examples:
         index["examples_left_out"] = True
-    elif a.example_cycles:
+    elif a.packs:
+        index["example_packs"] = a.packs   # raw.js loads ex-c<N>/p<KK>.js for a domain's example pages
+    if not a.no_examples and a.example_cycles:
         index["example_cycles"] = [c for c in ex_cycles if c in cycles]  # per-domain examples; whole-cycle ones in every cycle
     if a.text_chars:
         index["text_chars"] = a.text_chars

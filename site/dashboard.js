@@ -695,6 +695,7 @@ function buildCompareLine(spec) {
   const tf = tableFmt(spec.unit);
   const height = (spec.height || 210) + 24 + (series.length > 4 ? 24 : 0);
   return {
+    compared: true,
     badge: mixed ? "some runs per cycle only" : null,
     height,
     foot: [missing.length ? `Not logged for ${missing.join(", ")}.` : "", spec.foot || ""].filter(Boolean).join(" "),
@@ -764,19 +765,24 @@ function buildStack(spec) {
   const tf = tableFmt(spec.unit);
   const multi = series.length > 1;
   const height = (spec.height || 210) + (multi ? 24 : 0);
-  return {
+  const x = DATA.cycles; // this run's cycles, kept for the (lazy) draw: compare mode builds other runs' stacks too
+  const totals = x.map((_, i) => series.reduce((t, s) => t + (s.values[i] > 0 ? s.values[i] : 0), 0));
+  const built = {
     badge: state.view !== view ? "per cycle only" : null,
     height,
-    draw: (host) => Charts.stack(host, { name: spec.title, x: DATA.cycles, series, unit: spec.unit, fmt, height, legend: multi, selectedX: state.cycle }),
+    max: Math.max(0, ...totals),
+    yMax: null, // compare mode sets one scale for every run's stack
+    draw: (host) => Charts.stack(host, { name: spec.title, x, series, unit: spec.unit, fmt, height, legend: multi, selectedX: state.cycle, yMax: built.yMax }),
     table: {
       columns: ["Cycle", ...series.map((s) => s.label), ...(multi ? ["Total"] : [])],
-      rows: DATA.cycles.map((c, i) => {
+      rows: x.map((c, i) => {
         const vals = series.map((s) => s.values[i]);
         const total = vals.reduce((t, v) => (v == null ? t : (t || 0) + v), null);
         return [String(c), ...vals.map((v) => cell(v, tf)), ...(multi ? [cell(total, tf)] : [])];
       }),
     },
   };
+  return built;
 }
 
 // A part-to-whole for the selected cycle, or for every cycle up to it in the Cumulative view. Slices are % keys that add
@@ -921,6 +927,161 @@ const BUILDERS = {
   note: (spec) => ({ note: spec.text, gap: true }),
 };
 
+// ---- Compare mode for every chart kind --------------------------------------------------------------------------
+// Lines over cycles overlay the runs (buildCompareLine). Lines over hours or days overlay them too, each run on its own
+// x. Histograms overlay each run's shape as an outline. Pies, stacked columns and top-domain lists can't share axes:
+// one small chart per run, side by side or one under the other, stacked columns on one scale.
+
+const runData = (id) => (id === state.run ? DATA : LOADED.get(id));
+const shownRuns = () => [state.run, ...comparedRuns()];
+const DASHES = ["solid", "dot", "dash", "dashdot"];
+const runSwatch = (id) => {
+  const s = html("span", { class: "swatch" });
+  s.style.background = `var(--s${runSlot(id)})`;
+  return s;
+};
+const notFor = (names) => (names.length ? `Not available for ${names.join(", ")}.` : "");
+
+// One table for several runs: a Run column, then the union of their columns.
+function joinTables(parts) {
+  const cols = [];
+  for (const p of parts) for (const c of p.table.columns) if (!cols.includes(c)) cols.push(c);
+  const rows = parts.flatMap((p) => p.table.rows.map((r) => [runLabel(p.id), ...cols.map((c) => {
+    const j = p.table.columns.indexOf(c);
+    return j < 0 ? "—" : r[j];
+  })]));
+  return { columns: ["Run", ...cols], rows };
+}
+
+function buildCompareMulti(spec) {
+  const parts = shownRuns().map((id) => {
+    // only the open run's domain list opens the domain panel (it reads the open run's data); lists stay short
+    const s = { ...spec, clickable: spec.clickable && id === state.run, limit: spec.type === "bars" ? Math.min(spec.limit || 12, 8) : spec.limit };
+    return { id, built: withData(runData(id), () => BUILDERS[spec.type](s)) };
+  });
+  const shown = parts.filter((p) => !p.built.empty && !p.built.note);
+  if (!shown.length) return parts[0].built;
+  const missing = parts.filter((p) => !shown.includes(p)).map((p) => runLabel(p.id));
+  if (spec.type === "stack") {
+    const yMax = Math.max(0, ...shown.map((p) => p.built.max || 0));
+    for (const p of shown) p.built.yMax = yMax;
+  }
+  const side = spec.type === "pie";
+  const heights = shown.map((p) => (p.built.height || 220) + 28);
+  return {
+    compared: true,
+    wide: true,
+    html: spec.type === "bars",
+    sub: shown[0].built.sub,
+    // the HTML lists size themselves; the charts hold their space until drawn
+    height: spec.type === "bars" ? null : side ? Math.max(...heights) : heights.reduce((a, b) => a + b, 0),
+    foot: [notFor(missing), spec.type === "stack" && shown.length > 1 ? "Every run's columns on the same scale." : "",
+      spec.type === "bars" && spec.clickable ? `Only ${runLabel(state.run)}'s list opens a domain.` : ""].filter(Boolean).join(" "),
+    draw: (host) => {
+      host.textContent = "";
+      const wrap = html("div", { class: "multi " + (side ? "multi-side" : "multi-stack") });
+      host.append(wrap);
+      for (const p of shown) {
+        const sub = html("div", { class: "multi-chart" });
+        if (p.built.height) sub.style.minHeight = p.built.height + "px";
+        wrap.append(html("div", { class: "multi-panel" }, html("div", { class: "multi-head" }, runSwatch(p.id), html("span", { text: runLabel(p.id) })), sub));
+        p.built.draw(sub);
+      }
+    },
+    table: joinTables(shown.map((p) => ({ id: p.id, table: p.built.table }))),
+  };
+}
+
+// Histograms: the open run's bars (or the first run that has the cycle), the other runs as outlines in their colors.
+function buildCompareHist(spec) {
+  const got = [];
+  for (const id of shownRuns()) {
+    const d = runData(id);
+    const key = state.view === "cum" && d.histograms[spec.cum] ? spec.cum : spec.per;
+    const h = (d.histograms[key] || [])[d.cycles.indexOf(state.cycle)];
+    if (h) got.push({ id, h, cum: key === spec.cum });
+  }
+  if (!got.length) return BUILDERS.hist(spec);
+  const edgesOf = (h) => (h.bins ? h.bins : h.values.map((_, j) => h.min + j * h.size).concat(h.min + h.values.length * h.size));
+  const toPct = (h) => {
+    const total = h.values.reduce((a, b) => a + b, 0);
+    return h.values.map((v) => (total ? (100 * v) / total : 0));
+  };
+  const edges = edgesOf(got[0].h);
+  const same = got.filter((g) => edgesOf(g.h).length === edges.length && edgesOf(g.h).every((e, j) => Math.abs(e - edges[j]) < 1e-9));
+  const bins = got[0].h.values.map((_, j) => ({ lo: edges[j], hi: edges[j + 1] }));
+  const name = (g) => `${runLabel(g.id)}${g.cum ? "" : state.view === "cum" ? " (cycle only)" : ""}`;
+  const [first, ...rest] = same;
+  const series = { label: name(first), values: toPct(first.h), slot: runSlot(first.id) };
+  const refs = rest.map((g) => ({ label: name(g), values: toPct(g.h), slot: runSlot(g.id) }));
+  const missing = shownRuns().filter((id) => !same.some((g) => g.id === id)).map(runLabel);
+  const width = +(bins[0].hi - bins[0].lo).toFixed(4);
+  return {
+    compared: true,
+    sub: `% of English pages per ${width} bin, ${state.view === "cum" ? `every cycle up to ${state.cycle}` : `cycle ${state.cycle}`}`,
+    height: 234,
+    foot: notFor(missing),
+    draw: (host) => Charts.hist(host, { name: spec.title, bins, series, ref: refs, fmt: F.pct, height: 234, legend: true }),
+    table: {
+      columns: ["Score", series.label, ...refs.map((r) => r.label)],
+      rows: bins.map((b, j) => [`${b.lo.toFixed(2)}–${b.hi.toFixed(2)}`, F.pct(series.values[j]), ...refs.map((r) => F.pct(r.values[j]))]),
+    },
+  };
+}
+
+// Lines over another x (hours since the start) or over a table's rows (days): every run on its own x.
+function buildCompareXLine(spec) {
+  const series = [];
+  const missing = [];
+  const rows = [];
+  const kept = spec.compareKeep ? spec.series.filter((s) => spec.compareKeep.includes(s.label)) : spec.series;
+  for (const id of shownRuns()) {
+    const d = runData(id);
+    const got = withData(d, () => {
+      if (spec.type === "tableLine") {
+        const byCycle = DATA.tables[spec.table];
+        const t = byCycle && byCycle[Math.max(...Object.keys(byCycle).map(Number))];
+        if (!t || !t.data.length) return null;
+        const col = (n) => t.columns.indexOf(n);
+        const x = t.data.map((r) => r[col(spec.x.col)]);
+        return { x, lines: spec.series.map((s) => ({ s, values: t.data.map((r) => (r[col(s.col)] == null ? null : r[col(s.col)] * (s.factor || 1))) })) };
+      }
+      const x = metric(spec.x.key);
+      if (!has(x)) return null;
+      const view = chartView(spec);
+      return { x, lines: kept.map((s) => ({ s, values: pick(s, view)?.values })).filter((l) => l.values) };
+    });
+    if (!got || !got.lines.length) {
+      missing.push(runLabel(id));
+      continue;
+    }
+    got.lines.forEach((l, k) => {
+      const label = runLabel(id) + (got.lines.length > 1 ? ` · ${l.s.label}` : "");
+      series.push({ label, values: l.values, x: got.x, slot: runSlot(id), dash: DASHES[k % DASHES.length] });
+      got.x.forEach((xv, i) => rows.push([runLabel(id), l.s.label, cell(xv, F.num), cell(l.values[i], tableFmt(spec.unit))]));
+    });
+  }
+  if (!series.length) return BUILDERS[spec.type](spec);
+  const height = (spec.height || 210) + 24 + (series.length > 4 ? 24 : 0);
+  return {
+    compared: true,
+    height,
+    foot: [notFor(missing), spec.foot || ""].filter(Boolean).join(" "),
+    draw: (host) => Charts.line(host, { name: spec.title, x: series[0].x, xTitle: spec.x.title, xHoverFormat: spec.type === "tableLine" ? "d" : ".1f", series, unit: spec.unit, fmt: F[spec.unit], zero: spec.zero, height, legend: true, selectedX: null }),
+    table: { columns: ["Run", "Series", spec.x.title, "Value"], rows },
+  };
+}
+
+// The builder for a chart: the compare version when runs are compared and the chart kind has one.
+function buildFor(spec) {
+  if (comparedRuns().length) {
+    if (spec.type === "pie" || spec.type === "stack" || spec.type === "bars") return buildCompareMulti(spec);
+    if (spec.type === "hist") return buildCompareHist(spec);
+    if (spec.type === "tableLine" || (spec.type === "line" && spec.x)) return buildCompareXLine(spec);
+  }
+  return BUILDERS[spec.type](spec);
+}
+
 // ---- Rendering ------------------------------------------------------------------------------------------------------
 
 const drawFns = new WeakMap();
@@ -968,11 +1129,11 @@ function drawInto(host) {
 }
 
 function renderCard(spec, gaps) {
-  const built = BUILDERS[spec.type](spec);
+  const built = buildFor(spec);
   if (built.gap) gaps.add(spec.gap || spec.title);
   if (!built.empty && !built.note) {
-    // Say where the numbers come from when a run doesn't log them (each compared run on a line chart, too).
-    const shown = spec.type === "line" && !spec.x ? [state.run, ...comparedRuns()] : [state.run];
+    // Say where the numbers come from when a run doesn't log them (each compared run, too).
+    const shown = built.compared ? shownRuns() : [state.run];
     const notes = new Map();
     for (const id of shown) {
       const n = sourceNote(id === state.run ? DATA : LOADED.get(id), specKeys(spec));
@@ -981,9 +1142,9 @@ function renderCard(spec, gaps) {
     const src = [...notes].map(([n, who]) => (shown.length > 1 ? `${who.join(", ")}: ${n}` : capital(n))).join(" ");
     if (src) built.foot = [built.foot, src].filter(Boolean).join(" ");
   }
-  // Only line charts overlay the compared runs; the others stay on the open run, and say so.
-  if (comparedRuns().length && !built.empty && !built.note && (spec.type !== "line" || spec.x)) built.badge = `${runLabel(state.run)} only`;
-  const fig = html("figure", { class: "card" + (built.empty || built.note ? " quiet" : "") });
+  // A chart kind with no compare version stays on the open run, and says so.
+  if (comparedRuns().length && !built.empty && !built.note && !built.compared) built.badge = `${runLabel(state.run)} only`;
+  const fig = html("figure", { class: "card" + (built.empty || built.note ? " quiet" : "") + (built.wide ? " wide" : "") });
   const h3 = html("h3", { text: spec.title }, built.badge && html("span", { class: "badge", text: built.badge }));
   const titles = html("div", {}, h3, (built.sub || spec.sub) && html("p", { class: "sub", text: built.sub || spec.sub }));
   const head = html("div", { class: "card-head" }, titles);
@@ -1017,8 +1178,26 @@ function renderCard(spec, gaps) {
   return fig;
 }
 
+// How the run ranks and picks pages (runinfo.js, from Jerry's experiment configs and crawl list).
+const RUN_INFO_ROWS = [
+  ["what", "What it tests"], ["pageScore", "Page score"], ["priority", "Priority (what is fetched first)"],
+  ["perSite", "Per site"], ["perCycle", "Per cycle"], ["seeds", "Seeds"], ["fetching", "Fetching"], ["cycles", "Cycles"],
+];
+function renderRunInfo() {
+  const dl = document.getElementById("run-info");
+  dl.textContent = "";
+  const info = (window.RUN_INFO || {})[state.run];
+  dl.hidden = !info;
+  if (!info) return;
+  for (const [k, label] of RUN_INFO_ROWS) if (info[k]) dl.append(html("dt", { text: label }), html("dd", { text: info[k] }));
+  dl.append(html("dt", { text: "Source" }), html("dd", { text: info.config
+    ? `Jerry's experiment config ${info.config} and crawl list (webcrawler-progress).`
+    : "Jerry's crawl list (webcrawler-progress); the team's own crawl has no experiment config there." }));
+}
+
 function renderHeader() {
   document.getElementById("run-name").textContent = DATA.name;
+  renderRunInfo();
   const meta = document.getElementById("run-meta");
   meta.textContent = "";
   const cfg = DATA.config || {};
@@ -1120,7 +1299,16 @@ function renderKpis() {
     if (n) tileNotes.set(n, [...(tileNotes.get(n) || []), k.label]);
     const sparkHost = html("div", { class: "spark-host" });
     const label = html("div", { class: "label" }, k.label, html("span", { class: "scope", text: cum ? " · so far" : " · this cycle" }));
-    box.append(html("div", { class: "tile" }, label, html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost));
+    // Compare mode: each compared run's value at the same cycle, the same way (so far / this cycle) where it has it.
+    const cmp = comparedRuns().map((id) => {
+      const d = LOADED.get(id);
+      const j = d.cycles.indexOf(state.cycle);
+      const vals = withData(d, () => metric(cum && has(metric(k.cum)) ? k.cum : k.per));
+      return html("li", {}, runSwatch(id), html("span", { class: "tile-cmp-run", text: runLabel(id) }),
+        html("span", { text: j >= 0 && has(vals) ? cell(vals[j], F[k.unit]) : "—" }));
+    });
+    box.append(html("div", { class: "tile" }, label, html("div", { class: "value", text: cell(v, F[k.unit]) }), delta, sparkHost,
+      cmp.length ? html("ul", { class: "tile-cmp", "aria-label": "Compared runs, same cycle" }, ...cmp) : null));
     schedule(sparkHost, (host) => Charts.spark(host, values, i), resizer);
   }
   // Tiles this run doesn't log to W&B, and where their numbers come from.
@@ -1197,7 +1385,7 @@ function renderSectionFigures(sec) {
   const available = [];
   const missing = [];
   sec.charts.forEach((spec, i) => {
-    const built = BUILDERS[spec.type](spec);
+    const built = buildFor(spec);
     const card = renderCard(spec, new Set());
     card.id = `figure-${sec.id}-${i}`;
     card.tabIndex = -1;
@@ -1429,8 +1617,16 @@ function renderJunk() {
     const v = DATA.metrics[key];
     return i < 0 || !v ? null : v[i] ?? null;
   };
-  return Junk.render({ run: state.run, cycle: state.cycle, cum: state.view === "cum", valueAt, exact,
-    button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
+  // Compare mode: the compared runs' pies and junk trend beside the open run's (their own metrics for the English share)
+  const valueAtRun = (id, key, cycle) => {
+    const d = runData(id);
+    const i = d ? d.cycles.indexOf(cycle) : -1;
+    const v = d && d.metrics[key];
+    return i < 0 || !v ? null : v[i] ?? null;
+  };
+  const compare = comparedRuns().map((id) => ({ id, label: runLabel(id), slot: runSlot(id) }));
+  return Junk.render({ run: state.run, label: runLabel(state.run), slot: runSlot(state.run), cycle: state.cycle, cum: state.view === "cum",
+    valueAt, valueAtRun, compare, exact, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
 }
 
 let rawProbe = null; // the other runs' raw-data indexes, loaded once to say which runs have the section
@@ -1440,8 +1636,13 @@ function renderRaw() {
     const list = runsWith(Raw.has);
     return html("p", { class: "empty", text: "This run hasn't been read from the raw crawl data." + (list.length ? ` These runs have: ${list.join("; ")}.` : "") });
   }
-  return Raw.render({ run: state.run, label: runLabel(state.run), cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
+  const view = Raw.render({ run: state.run, label: runLabel(state.run), cycle: state.cycle, button, openPanel, schedule: (host, draw) => schedule(host, draw, lazy), rerender: renderSections });
+  return comparedRuns().length ? html("div", {}, singleRunNote(), view) : view;
 }
+
+// The per-domain tabs show one run's domains: compare mode leaves them on the open run and says so.
+const singleRunNote = () => html("p", { class: "blurb compare-note",
+  text: `This tab shows one run's domains: ${runLabel(state.run)}. Compared runs show on the other tabs; pick a run at the top to see its domains here.` });
 
 // ---- Search and domain investigation -------------------------------------------------------------------------------
 const explorerState = { mode: "overview", query: "", sort: "pages", ascending: false };
@@ -1480,6 +1681,7 @@ function loggedFields(data) {
 
 function renderExplorer() {
   const box = html("div", { class: "domain-explorer" });
+  if (comparedRuns().length) box.append(singleRunNote());
   const logged = loggedFields(DATA);
   const fieldsOf = (m) => m.fields.filter((k) => logged.has(k));
   const shown = Object.entries(EXPLORER_MODES).filter(([, m]) => fieldsOf(m).length);
