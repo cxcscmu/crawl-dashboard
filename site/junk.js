@@ -702,7 +702,7 @@ const Junk = (() => {
     // of cutoff (its own top 1% with "of this run"), and its own English share.
     const cmp = ctx.compare || [];
     if (cmp.length) {
-      const row = html("div", { class: "grid" });
+      const row = html("div", { class: "grid grid-fill" }); // one compared run keeps a normal card width
       for (const c of cmp) row.append(comparePie(c));
       box.append(html("h3", { class: "subhead", text: "Compared runs: where every crawled page goes" }), row);
     }
