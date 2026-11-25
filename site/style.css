@@ -403,3 +403,8 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .kpi-note { margin: 10px 0 0; max-width: 110ch; }
 .hb-strong { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
 .hb-strong .hb-label { font-weight: 600; color: var(--ink); }
+
+/* Junk check: the every-page pipeline counts, then the sampled pages */
+.subhead { margin: 28px 0 12px; font-size: 15px; font-weight: 600; color: var(--ink); }
+.sec h3.subhead:first-child { margin-top: 4px; }
+.sec .junk-exact { margin-top: 28px; }

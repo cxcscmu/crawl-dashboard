@@ -244,14 +244,16 @@ const Charts = (() => {
     const fmt = show(spec.fmt);
     // A 1px surface outline on every segment leaves a 2px gap between neighbours; the column top is rounded.
     // The legend and hover readout list segments top to bottom, as they're stacked, then the total.
+    // With many cycles (the CC-style crawl has 165+) the outlines and gaps would eat the columns: draw them plain.
     const n = spec.series.length;
+    const dense = spec.x.length > 60;
     const traces = spec.series.map((s, k) => ({
       type: "bar",
       name: s.label,
       legendrank: 100 + (n - 1 - k),
       x: spec.x,
       y: s.values,
-      marker: { color: p.slot(s.slot), line: { color: p.surface, width: 1 } },
+      marker: { color: p.slot(s.slot), line: { color: p.surface, width: dense ? 0 : 1 } },
       customdata: s.values.map(fmt),
       hovertemplate: `%{customdata}  ${s.label}<extra></extra>`,
     }));
@@ -272,8 +274,47 @@ const Charts = (() => {
       });
     }
     const layout = baseLayout(p, { ...spec, zero: true, max: Math.max(...totals) });
-    Object.assign(layout, { barmode: "stack", bargap: 0.5, barcornerradius: 4 });
+    Object.assign(layout, { barmode: "stack", bargap: dense ? 0 : 0.5, barcornerradius: dense ? 0 : 4 });
     layout.legend.traceorder = "normal"; // Plotly reverses stacked legends by default; the ranks above set the order
+    plot(host, spec.height, spec.name, traces, layout);
+  }
+
+  // ---- Pie (donut) --------------------------------------------------------------------------------------------------
+  // spec: { name, slices: [{label, value, count, slot}], center, height, fmt }
+  // A part-to-whole of one cycle (or of all cycles so far): slices go clockwise from the top in the order given, a 2px
+  // surface gap between them, percentages inside the slices that have room, the total in the hole.
+  function pie(host, spec) {
+    const p = palette();
+    const fmt = show(spec.fmt || F.pct);
+    const sl = spec.slices.filter((s) => s.value != null && s.value > 0);
+    const traces = [{
+      type: "pie",
+      labels: sl.map((s) => s.label),
+      values: sl.map((s) => s.value),
+      sort: false,
+      direction: "clockwise",
+      rotation: 0,
+      hole: 0.58,
+      marker: { colors: sl.map((s) => p.slot(s.slot)), line: { color: p.surface, width: 2 } },
+      textinfo: "percent",
+      textposition: "inside",
+      insidetextorientation: "horizontal",
+      texttemplate: "%{percent:.0%}",
+      textfont: { family: FONT, size: 11 }, // Plotly picks a light or dark label for each slice's fill
+      customdata: sl.map((s) => fmt(s.value) + (s.count != null ? ` · ${F.count(s.count)} pages` : "")),
+      hovertemplate: "%{label}<br>%{customdata}<extra></extra>",
+    }];
+    const layout = {
+      autosize: true,
+      margin: { l: 8, r: 8, t: 8, b: 8 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      font: { family: FONT, size: 11, color: p.muted },
+      showlegend: true,
+      legend: { orientation: "v", x: 1.02, xanchor: "left", y: 0.5, yanchor: "middle", traceorder: "normal", font: { size: 12, color: p.ink2 }, bgcolor: "rgba(0,0,0,0)" },
+      uniformtext: { mode: "hide", minsize: 10 },
+      hoverlabel: { bgcolor: p.surface, bordercolor: p.border, font: { family: FONT, size: 12, color: p.ink } },
+      annotations: spec.center ? [{ text: spec.center, showarrow: false, x: 0.5, y: 0.5, xref: "paper", yref: "paper", font: { size: 13, color: p.ink } }] : [],
+    };
     plot(host, spec.height, spec.name, traces, layout);
   }
 
@@ -408,5 +449,5 @@ const Charts = (() => {
     host.append(html("div", { class: "tbl-wrap" }, html("table", { class: "data" }, html("thead", {}, head), html("tbody", {}, ...body))));
   }
 
-  return { html, formats: F, signed, line, stack, hist, spark, bars, table, resize, failed, destroyAll };
+  return { html, formats: F, signed, line, stack, pie, hist, spark, bars, table, resize, failed, destroyAll };
 })();

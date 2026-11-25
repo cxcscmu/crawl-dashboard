@@ -39,7 +39,7 @@ const Raw = (() => {
     urls: ["Distinct URLs", "int"],
     extra: ["Repeat records", "int", (T, i) => (T.records && T.records[i] != null ? T.records[i] - T.urls[i] : null)],
     lang_en: ["English pages", "int"],
-    enOver: ["English minus 200s", "int", (T, i) => T.lang_en[i] - T.cdx200[i]],
+    enOver: ["English minus 200s", "int", (T, i) => (T.lang_en ? T.lang_en[i] - T.cdx200[i] : undefined)], // no lang_en: crawl tags no languages
     bot: ["Bot-check pages", "int"],
     jscss: ["JS/CSS files", "int"],
     other_lang: ["Other-language pages", "int"],
@@ -168,7 +168,8 @@ const Raw = (() => {
     const series = (f) => R.cycles.map((c) => f(R.summary[c], c) ?? null);
 
     box.append(html("p", { class: "blurb", text: `Cycle ${cycle} of ${ctx.label || R.label}, cycles ${R.cycles[0]}–${R.cycles.at(-1)} read. ` + (cycle !== ctx.cycle ? `(Cycle ${ctx.cycle} hasn't been read from the raw data.) ` : "") + (R.domain_rows || "Domain rows cover domains with 3 or more pages in the cycle.") +
-      (R.example_cycles ? ` Example pages for single domains are kept for cycle${R.example_cycles.length > 1 ? "s" : ""} ${R.example_cycles.join(", ")}; the whole-cycle examples are there for every cycle${R.text_chars ? `, all with their first ${F.int(R.text_chars)} characters of text` : ""}.` : "") }));
+      (R.examples_left_out ? " Example pages with their text are left out of this version, to keep the site within GitHub's size limit; every number here still counts every page."
+        : R.example_cycles ? ` Example pages for single domains are kept for cycle${R.example_cycles.length > 1 ? "s" : ""} ${R.example_cycles.join(", ")}; the whole-cycle examples are there for every cycle${R.text_chars ? `, all with their first ${F.int(R.text_chars)} characters of text` : ""}.` : "") }));
 
     const tile = (label, v, note) => html("div", { class: "tile" }, html("div", { class: "label", text: label }), html("div", { class: "value", text: v }), html("div", { class: "delta", text: note || "" }));
     const tiles = html("section", { class: "kpis raw-tiles", "aria-label": `Cycle ${cycle} raw-data summary` },
@@ -178,7 +179,7 @@ const Raw = (() => {
       tiles.append(
         tile("Repeat parse records", F.count(U.records - U.urls), U.repeat_urls ? `${F.pct((100 * U.repeat_urls_redirect_targets) / U.repeat_urls)} of repeated URLs are redirect targets` : ""),
         tile("Fetched, not on the fetch list", F.count(U.unlisted_urls), U.unlisted_urls ? `${F.pct((100 * U.unlisted_redirect_targets) / U.unlisted_urls)} are redirect targets` : ""),
-        tile("Bot-check pages", F.count(U.bot_pages), `on ${F.count(U.bot_domains)} domains, all scored 0`));
+        S.lang_na ? tile("Bot-check pages", "n/a", S.lang_na) : tile("Bot-check pages", F.count(U.bot_pages), `on ${F.count(U.bot_domains)} domains, all scored 0`));
     }
     tiles.append(tile("Priority vs page score", hasPriority ? F.corr(S.spearman_pages) : "n/a", hasPriority ? `Spearman, all pages; ${F.corr(S.spearman_within_median)} within a domain` : S.priority_na || "seed cycle: every priority is 0"));
     box.append(tiles);
@@ -214,7 +215,7 @@ const Raw = (() => {
       title: "Priority vs page score", sub: "Spearman correlation per cycle", height: 260,
       draw: (h) => Charts.line(h, { name: "Priority vs page score per cycle", x: R.cycles, series: corr, unit: "corr", fmt: F.corr, height: 260, legend: true, selectedX: cycle }),
       table: seriesTable(R.cycles, "Cycle", corr, "corr"),
-      foot: `Page score = the page's own quality score once fetched: its fastText quality and FineWeb-Edu scores, each turned into a percentile, averaged. Priority = what the URL was selected with: ${R.priority_def || "the average page score of the already-fetched pages that link to it"}. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs` +
+      foot: `Page score = the page's own quality score once fetched: ${R.score_def || "its fastText quality and FineWeb-Edu scores, each turned into a percentile, averaged"}. Priority = what the URL was selected with: ${R.priority_def || "the average page score of the already-fetched pages that link to it"}. Domain averages compare each domain's mean priority with its mean score (10+ scored pages); within one domain uses domains with 30+ scored pairs` +
         (hasPriority ? `, ${F.pct(S.spearman_within_negative_pct)} of which are negative in cycle ${cycle}.` : ".") + (R.seed_note ?? " The first cycle is the seed list, where every priority is 0."),
     }));
     if (S.hist) {
@@ -255,14 +256,18 @@ const Raw = (() => {
     }));
     const kinds = [["bot", "Bot-check page", 8], ["other_lang", "Another language", 1], ["jscss", "JS/CSS file", 4], ["unknown", "Language not detected", 7], ["untagged", "Other file, no tag", "muted"]];
     const withUrl = R.cycles.filter((c) => R.summary[c].url_level);
+    // Cycles whose crawl tags page languages: the only ones where "no English page" means anything
+    const withLang = withUrl.filter((c) => !R.summary[c].lang_na);
     if (withUrl.length) {
-      const noEn = kinds.map(([k, label, slot]) => ({ label, slot, values: withUrl.map((c) => R.summary[c].url_level.no_en_kinds[k]) }));
-      grid.append(card({
-        title: "Pages on domains with no English page", sub: "Parse records per cycle, by what the page is", height: 260,
-        draw: (h) => Charts.stack(h, { name: "Pages on domains with no English page, by kind, per cycle", x: withUrl, series: noEn, unit: "count", fmt: F.count, height: 260, legend: true, selectedX: cycle }),
-        table: seriesTable(withUrl, "Cycle", noEn, "int"),
-        foot: U ? `Cycle ${cycle}: ${F.int(U.no_en_domains)} domains with ${F.int(U.no_en_pages)} pages. Bot-check pages are 200 responses holding a challenge page; JS/CSS files come from CDN hosts.` : "",
-      }));
+      if (withLang.length) {
+        const noEn = kinds.map(([k, label, slot]) => ({ label, slot, values: withLang.map((c) => R.summary[c].url_level.no_en_kinds[k]) }));
+        grid.append(card({
+          title: "Pages on domains with no English page", sub: "Parse records per cycle, by what the page is", height: 260,
+          draw: (h) => Charts.stack(h, { name: "Pages on domains with no English page, by kind, per cycle", x: withLang, series: noEn, unit: "count", fmt: F.count, height: 260, legend: true, selectedX: cycle }),
+          table: seriesTable(withLang, "Cycle", noEn, "int"),
+          foot: U && !S.lang_na ? `Cycle ${cycle}: ${F.int(U.no_en_domains)} domains with ${F.int(U.no_en_pages)} pages. Bot-check pages are 200 responses holding a challenge page; JS/CSS files come from CDN hosts.` : "",
+        }));
+      }
       const unl = [
         { label: "Redirect target", slot: 1, values: withUrl.map((c) => R.summary[c].url_level.unlisted_redirect_targets) },
         { label: "Other", slot: "muted", values: withUrl.map((c) => R.summary[c].url_level.unlisted_urls - R.summary[c].url_level.unlisted_redirect_targets) },
@@ -293,7 +298,9 @@ const Raw = (() => {
     const output = html("div");
     let T = null;
     let update = () => {};
-    box.append(modes, html("p", { class: "explorer-note", text: R.list_limit ? mode.note.replace("250 at most", R.list_limit) : mode.note }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
+    const modeNote = (R.list_limit ? mode.note.replace("250 at most", R.list_limit) : mode.note) +
+      (S.lang_na && ui.mode === "mismatch" ? ` This crawl doesn't tag page languages (it loads no language or score model), so there are no English or bot-check counts here; its English share comes from the text job, in the Language section.` : "");
+    box.append(modes, html("p", { class: "explorer-note", text: modeNote }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, status), output);
 
     loadDomains(ctx.run, cycle).then((table) => {
       if (!table) { status.textContent = "The domain table for this cycle couldn't be loaded."; return; }
@@ -328,14 +335,15 @@ const Raw = (() => {
         }
         output.append(html("div", { class: "tbl-wrap", tabindex: "0", role: "region", "aria-label": "Domains, scroll horizontally for more columns" }, html("table", { class: "data explorer-table" },
           html("thead", {}, html("tr", {}, html("th", { scope: "col", text: "Domain" }), ...cols.map((k) => html("th", { scope: "col", text: COLS[k][0] })))), body)),
-          html("p", { class: "foot", text: "▸ marks domains with example pages. Select a domain for its numbers and pages." }));
+          html("p", { class: "foot", text: R.examples_left_out ? "Select a domain for its numbers." : "▸ marks domains with example pages. Select a domain for its numbers and pages." }));
       };
       search.addEventListener("input", update);
       sort.addEventListener("change", update);
       update();
     });
 
-    // ---- Whole-cycle examples
+    // ---- Whole-cycle examples (none in a build made with --no-examples; the blurb says so)
+    if (R.examples_left_out) return box;
     box.append(html("h3", { class: "raw-h", text: `Example pages from the whole cycle ${cycle}` }));
     const exHost = html("div", {}, html("p", { class: "empty", text: "Loading example pages…" }));
     box.append(html("p", { class: "explorer-note", text: "Ten pages per group, picked over every domain in the cycle, with the text the crawler extracted." }), exHost);
@@ -352,10 +360,14 @@ const Raw = (() => {
     const domain = T.domain[i];
     const cause = T.cause && T.cause[i];
     panel.append(html("p", { text: `Cycle ${cycle}, read from the segment and the WARC index.` + (cause ? ` What stands out: ${cause}.` : "") }));
-    panel.append(html("h3", { text: "Example pages with crawled text" }));
-    const exHost = html("div", {}, html("p", { class: "empty", text: T.has_ex[i] ? "Loading example pages…" : `No example pages were extracted for this domain in this cycle. ${R.summary[cycle].example_domains.length} of the largest domains have them.` }));
+    if (R.examples_left_out) {
+      panel.append(html("p", { class: "foot", text: "Example pages are left out of this version (the site's size limit)." }));
+    } else {
+      panel.append(html("h3", { text: "Example pages with crawled text" }));
+    }
+    const exHost = html("div", {}, R.examples_left_out ? null : html("p", { class: "empty", text: T.has_ex[i] ? "Loading example pages…" : `No example pages were extracted for this domain in this cycle. ${R.summary[cycle].example_domains.length} of the largest domains have them.` }));
     panel.append(exHost);
-    if (T.has_ex[i]) {
+    if (T.has_ex[i] && !R.examples_left_out) {
       loadExamples(run, cycle, domain).then((rows) => {
         exHost.textContent = "";
         exHost.append(rows ? exampleList(rows, R.summary[cycle].spearman_pages != null, !!T.records && T.records[i] > T.urls[i]) : html("p", { class: "empty", text: "The example pages couldn't be loaded." }));

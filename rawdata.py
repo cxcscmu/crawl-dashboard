@@ -100,28 +100,33 @@ def url_stats(folder):
         "linked": linked, "bot_pages": int(u.bot.sum()), "bot_domains": int(u[u.bot].domain.nunique()),
         "no_en_domains": int((s.en == 0).sum()), "no_en_pages": len(no_en),
         "no_en_kinds": {k: int(no_en[k].sum()) for k in KINDS},
+        # records with any language tag: 0 in a crawl that loads no language or score model (CC-style, TrustRank,
+        # plain OPIC), where "English", "bot-check" and the no-English kinds don't mean anything
+        "lang_tagged": int((lang != "").sum()),
     }
     return s, totals
 
 
-def cause(r):
-    """Why a domain's counts disagree, from its own numbers. Empty when nothing stands out."""
+def cause(r, lang=True):
+    """Why a domain's counts disagree, from its own numbers. Empty when nothing stands out. lang=False: the crawl tags
+    no page languages, so only the redirect repeats can be told."""
     out = []
     rec = r.get("records") or 0
     if rec and r["records"] - r["urls"] >= max(5, 0.1 * r["urls"]):
         out.append("repeated by redirects")
     for k, label in [("bot", "bot-check pages"), ("jscss", "JS/CSS files"), ("other_lang", "other language"), ("unknown", "language not detected")]:
-        if rec and r[k] >= 0.5 * rec:
+        if lang and rec and r[k] >= 0.5 * rec:
             out.append(label)
     return ", ".join(out)
 
 
-def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True):
+def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with_examples=True, write_examples=True):
     """max_domains keeps only that many domains (most HTTP 200s first, plus every example domain) in the cycle's domain
     table; the cycle's own numbers still use every domain. text_chars cuts example texts (chars keeps the full length).
     Without examples the cycle keeps only its whole-cycle example pages (the few dozen picked over every domain), not
-    the per-domain ones."""
-    d = pd.read_csv(f"{folder}/domains.tsv.gz", sep="\t", keep_default_na=False, na_values=[""])
+    the per-domain ones. write_examples=False writes no example pages at all (the site's size limit): no domain is
+    marked as having them, and the domain table and every number stay the same."""
+    d = pd.read_csv(f"{folder}/domains.tsv.gz", sep="\t", keep_default_na=False, na_values=[""], quoting=3)
     d["domain"] = d.domain.fillna("").astype(str)
     counts = pd.read_csv(f"{folder}/counts.tsv", sep="\t", header=None, index_col=0)[1]
     us, totals = url_stats(folder)
@@ -129,24 +134,25 @@ def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with
         d = d.merge(us, left_on="domain", right_index=True, how="left")
     examples = {}
     whole = []
-    with gzip.open(f"{folder}/examples.jsonl.gz", "rt") as f:
-        for line in f:
-            e = json.loads(line)
-            if text_chars and e.get("text") and len(e["text"]) > text_chars:
-                e["text"] = e["text"][:text_chars]
-            groups = e.pop("buckets").split(",")
-            e["groups"] = groups
-            # A page can be picked for its domain and for the whole cycle: each list keeps only its own groups, or a
-            # random whole-cycle pick that was also its domain's top-scored page would show as one of the cycle's top.
-            own = [g for g in groups if not g.startswith("global_")]
-            glob_ = [g for g in groups if g.startswith("global_")]
-            if own and with_examples:
-                examples.setdefault(e["target"], []).append({**e, "groups": own})
-            if glob_:
-                whole.append({**e, "groups": glob_})
-    for dom, rows in examples.items():
-        js(f"{out}/{run}/ex-c{cycle}/{safe_name(dom)}.js", "CRAWL_RAW_EX", f"{run}/{cycle}/{dom}", rows)
-    js(f"{out}/{run}/ex-c{cycle}/_cycle.js", "CRAWL_RAW_EX", f"{run}/{cycle}/", whole)
+    if write_examples:
+        with gzip.open(f"{folder}/examples.jsonl.gz", "rt") as f:
+            for line in f:
+                e = json.loads(line)
+                if text_chars and e.get("text") and len(e["text"]) > text_chars:
+                    e["text"] = e["text"][:text_chars]
+                groups = e.pop("buckets").split(",")
+                e["groups"] = groups
+                # A page can be picked for its domain and for the whole cycle: each list keeps only its own groups, or
+                # a random whole-cycle pick that was also its domain's top-scored page would show as one of the cycle's top.
+                own = [g for g in groups if not g.startswith("global_")]
+                glob_ = [g for g in groups if g.startswith("global_")]
+                if own and with_examples:
+                    examples.setdefault(e["target"], []).append({**e, "groups": own})
+                if glob_:
+                    whole.append({**e, "groups": glob_})
+        for dom, rows in examples.items():
+            js(f"{out}/{run}/ex-c{cycle}/{safe_name(dom)}.js", "CRAWL_RAW_EX", f"{run}/{cycle}/{dom}", rows)
+        js(f"{out}/{run}/ex-c{cycle}/_cycle.js", "CRAWL_RAW_EX", f"{run}/{cycle}/", whole)
 
     d["has_ex"] = d.domain.isin(examples.keys()).astype(int)
     d["failed"] = d.f_gone + d.f_retry
@@ -155,11 +161,16 @@ def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with
     if max_domains and len(d) > max_domains:
         d = d.sort_values(["cdx200", "parsed"], ascending=False)
         d = d[(np.arange(len(d)) < max_domains) | (d.has_ex == 1)]
+    # A crawl that loads no language or score model tags no page with a language: its English and bot-check counts are
+    # all 0 by construction, so those columns are left out and the page says why.
+    lang_na = bool(totals) and totals.get("lang_tagged", 1) == 0
     table = {"domain": d.domain.tolist()}
-    ints = ["listed", "fetches", "f_success", "f_redir", "f_gone", "f_retry", "cdx200", "parsed", "lang_en", "scored", "outlinks", "outlinks_cross", "pairs", "has_ex"]
+    ints = ["listed", "fetches", "f_success", "f_redir", "f_gone", "f_retry", "cdx200", "parsed", "scored", "outlinks", "outlinks_cross", "pairs", "has_ex"]
+    if not lang_na:
+        ints.append("lang_en")
     if us is not None:
-        ints += ["records", "urls", "via_redirect", "unlisted", "bot", "jscss", "other_lang", "unknown"]
-        table["cause"] = [cause(r) for r in d[["records", "urls", "bot", "jscss", "other_lang", "unknown"]].to_dict("records")]
+        ints += ["records", "urls", "via_redirect", "unlisted"] + ([] if lang_na else ["bot", "jscss", "other_lang", "unknown"])
+        table["cause"] = [cause(r, not lang_na) for r in d[["records", "urls", "bot", "jscss", "other_lang", "unknown"]].to_dict("records")]
     for c in ints:
         table[c] = col(d[c])
     for c in ["priority_mean", "score_mean", "spearman", "pearson"]:
@@ -200,6 +211,7 @@ def build_cycle(run, folder, cycle, out, max_domains=None, text_chars=None, with
         "outlinks": int(d.outlinks.sum()), "outlinks_cross": int(d.outlinks_cross.sum()),
         "outlinks_per_page_median": clean((p20.outlinks / p20.parsed).median(), 1) if len(p20) else None,
         "url_level": totals or None,
+        "lang_na": "this crawl doesn't tag page languages (it loads no language or score model)" if lang_na else None,
         "example_domains": sorted(examples.keys()),
     }
     print(f"cycle {cycle}: {len(d):,} domains, {len(examples)} example domains, {len(whole)} whole-cycle examples", flush=True)
@@ -220,21 +232,35 @@ def main():
     ap.add_argument("--priority-def", default=None, help="what priority is in this crawl, for the page's notes")
     ap.add_argument("--list-limit", default=None, help="the per-domain fetch-list limit, for the page's notes")
     ap.add_argument("--seed-note", default=None, help="the note on the first cycle's priorities ('' for none)")
+    ap.add_argument("--score-def", default=None, help="what the page score is in this crawl, for the page's notes")
+    ap.add_argument("--no-examples", action="store_true",
+                    help="write no example pages (they don't fit the site's size limit); the page says they're left out")
+    ap.add_argument("--procs", type=int, default=1, help="cycles built at once")
     a = ap.parse_args()
     lo, _, hi = a.cycles.partition("-")
     cycles = [c for c in range(int(lo), int(hi or lo) + 1) if os.path.exists(f"{a.src}/{a.prefix}-c{c}/DONE")]
     if not cycles:
         sys.exit(f"No finished cycles for {a.prefix} in {a.src}")
     ex_cycles = [int(c) for c in a.example_cycles.split(",")] if a.example_cycles else cycles
-    summaries = {c: build_cycle(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out, a.max_domains, a.text_chars, c in ex_cycles) for c in cycles}
+    jobs = [(a.run, f"{a.src}/{a.prefix}-c{c}", c, a.out, a.max_domains, a.text_chars, c in ex_cycles, not a.no_examples)
+            for c in cycles]
+    if a.procs > 1:
+        from multiprocessing import Pool
+        with Pool(a.procs) as pool:
+            summaries = dict(zip(cycles, pool.starmap(build_cycle, jobs)))
+    else:
+        summaries = {j[2]: build_cycle(*j) for j in jobs}
     index = {"label": a.label or f"crawl {a.prefix}", "cycles": cycles, "summary": summaries}
     if a.max_domains:
-        index["domain_rows"] = f"Domain rows cover the {a.max_domains:,} domains with the most pages in the cycle (of those with 3 or more), plus every domain with example pages."
-    if a.example_cycles:
+        index["domain_rows"] = (f"Domain rows cover the {a.max_domains:,} domains with the most pages in the cycle (of those with 3 or more)"
+                                + ("." if a.no_examples else ", plus every domain with example pages."))
+    if a.no_examples:
+        index["examples_left_out"] = True
+    elif a.example_cycles:
         index["example_cycles"] = [c for c in ex_cycles if c in cycles]  # per-domain examples; whole-cycle ones in every cycle
     if a.text_chars:
         index["text_chars"] = a.text_chars
-    for k in ("priority_def", "list_limit", "seed_note"):
+    for k in ("priority_def", "list_limit", "seed_note", "score_def"):
         if getattr(a, k) is not None:
             index[k] = getattr(a, k)
     js(f"{a.out}/{a.run}.js", "CRAWL_RAW", a.run, index)

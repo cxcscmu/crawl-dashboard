@@ -29,9 +29,7 @@ import sys
 from collections import Counter
 from multiprocessing import Pool
 
-import numpy as np
-import pandas as pd
-import regex
+import regex   # pandas is imported where it's used, so the cluster jobs can import rules() without it
 
 HOME = os.path.expanduser("~/crawl-data")
 OUT = HOME + "/analysis/junk"
@@ -168,6 +166,7 @@ def rules(text, interstitial):
 
 
 def one_file(path):
+    import pandas as pd
     run, c = re.search(r"(\d+)-c(\d+)\.jsonl", path).groups()
     rows = []
     with gzip.open(path, "rt", encoding="utf-8") as fh:
@@ -186,6 +185,7 @@ def one_file(path):
 
 
 def main():
+    import pandas as pd
     os.makedirs(OUT, exist_ok=True)
     files = sorted(glob.glob(HOME + "/v2sample/*.jsonl.gz"))
     if len(sys.argv) > 1:

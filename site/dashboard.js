@@ -59,6 +59,34 @@ function rankScore(rows) {
   return fn;
 }
 
+// Jerry's pretraining pipeline (extra.py pipeline/ keys): every page of a cycle that has text, in his main-content
+// extraction -> English filter -> DCLM-Baseline rules (a page counts under the first rule it fails) -> dedup -> fastText cut.
+const PIPELINE_SERIES = [
+  { label: "Kept for training", per: "pipeline/kept_pct", cum: "pipeline/kept_pct_cumulative", slot: 1 },
+  { label: "Below the fastText cut", per: "pipeline/below_fasttext_pct", cum: "pipeline/below_fasttext_pct_cumulative", slot: 2 },
+  { label: "Duplicate", per: "pipeline/duplicate_pct", cum: "pipeline/duplicate_pct_cumulative", slot: 3 },
+  { label: "Junk: repetitive", per: "pipeline/junk_repetition_pct", cum: "pipeline/junk_repetition_pct_cumulative", slot: 4 },
+  { label: "Junk: too short or long", per: "pipeline/junk_length_pct", cum: "pipeline/junk_length_pct_cumulative", slot: 5 },
+  { label: "Junk: line cleanup removed too much", per: "pipeline/junk_line_cleanup_pct", cum: "pipeline/junk_line_cleanup_pct_cumulative", slot: 6 },
+  { label: "Junk: other DCLM rules", per: "pipeline/junk_other_pct", cum: "pipeline/junk_other_pct_cumulative", slot: 7 },
+  { label: "Not English or no main text", per: "pipeline/not_english_pct", cum: "pipeline/not_english_pct_cumulative", slot: "muted" },
+];
+const PIPELINE_CHARTS = [
+  {
+    type: "pie", title: "Through Jerry's pipeline: where every page goes", sliceHead: "Where the page went",
+    sub: "every page with text, exact counts",
+    series: PIPELINE_SERIES, total: { per: "pipeline/docs", cum: "pipeline/docs_cumulative" },
+  },
+  {
+    type: "line", title: "Junk share of everything crawled", sub: "% of pages failing at least one DCLM-Baseline rule", unit: "pct",
+    series: [
+      { label: "Of all pages", per: "pipeline/junk_pct", cum: "pipeline/junk_pct_cumulative" },
+      { label: "Of English pages", per: "pipeline/junk_pct_of_english", cum: "pipeline/junk_pct_of_english_cumulative" },
+    ],
+  },
+  { type: "stack", title: "Where every crawled page goes, per cycle", sub: "% of the cycle's pages with text", unit: "pct", series: PIPELINE_SERIES, height: 330 },
+];
+
 const SECTIONS = [
   {
     id: "quality",
@@ -175,7 +203,7 @@ const SECTIONS = [
   {
     id: "junk",
     title: "Junk check",
-    blurb: "Read straight from page text sampled on the cluster, not from W&B: how much of the crawled text is junk by DCLM-Baseline's rules plus two of ours, and how that changes with the fastText, FineWeb-Edu and page scores and with priority.",
+    blurb: "How much of the crawl is junk, on the text you pick: the whole page as the crawler parses it, or the main content Jerry's pipeline keeps for training. First every crawled page by DCLM-Baseline's rules, then sampled pages by DCLM's rules plus two of ours, and how that changes with the fastText, FineWeb-Edu and page scores and with priority.",
     charts: [],
   },
   {
@@ -230,13 +258,14 @@ const SECTIONS = [
         compareKeep: ["Top 100", "10,001 and below"], // two lines per run when runs are compared
       },
       {
-        type: "stack", title: "Share of pages by domain rank", sub: "% of the cycle's HTTP 200 pages on each group of domains", unit: "pct",
+        type: "stack", title: "Share of pages by domain rank", sub: "% of the cycle's fetched pages on each group of domains", unit: "pct",
         series: RANK_GROUPS.map(([k, label]) => ({ label, key: `domains/rank_${k}_pages_pct` })),
       },
       {
-        // Counts HTTP 200 records in the WARC index. No line at TOPN_PER_DOMAIN: until 2026-10-22 the fetcher followed
-        // redirects to other domains inline, past the target domain's limit (fetcher.redirect.follow.other.domain).
-        type: "bars", title: "Top domains by pages fetched", sub: "Pages that returned HTTP 200, per domain",
+        // Counts HTTP 200 records in the WARC index, plus fetch-cache replays where extra.py added them (the note says
+        // which). No line at TOPN_PER_DOMAIN: until 2026-10-22 the fetcher followed redirects to other domains inline,
+        // past the target domain's limit (fetcher.redirect.follow.other.domain).
+        type: "bars", title: "Top domains by pages fetched", sub: "Pages fetched per domain",
         table: "domains/top_domains", tableCum: "domains/top_domains_cumulative",
         value: "pages", unit: "count", valueHead: "Pages fetched", extras: [{ col: "share %", head: "Share", unit: "pct" }], clickable: true,
       },
@@ -334,7 +363,7 @@ const SECTIONS = [
         ],
       },
       {
-        type: "stack", title: "HTTP status mix", sub: "% of responses", unit: "pct",
+        type: "stack", title: "HTTP status mix", sub: "% of responses to the requests sent; pages replayed from the fetch cache weren't requested (see Fetch cache)", unit: "pct",
         series: [
           { label: "2xx", sum: ["fetch/http_200_pct", "fetch/http_2xx_pct"], sumCum: ["fetch/http_200_pct_cumulative", "fetch/http_2xx_pct_cumulative"] },
           {
@@ -612,6 +641,7 @@ const RUN_NAMES = {
   "crawl-259887": "OPIC with CC limits",
   "crawl-265639": "OPIC with flat 250",
   "crawl-269821": "TrustRank with flat 250",
+  "crawl-271533": "Plain OPIC with flat 250",
 };
 function runLabel(id) {
   if (RUN_NAMES[id]) return RUN_NAMES[id];
@@ -727,7 +757,7 @@ function buildStack(spec) {
   const series = [];
   spec.series.forEach((s, k) => {
     const r = pick(s, view);
-    if (r) series.push({ label: s.label, values: r.values, slot: k + 1 });
+    if (r) series.push({ label: s.label, values: r.values, slot: s.slot ?? k + 1 });
   });
   if (!series.length) return emptyCard(spec);
   const fmt = F[spec.unit];
@@ -745,6 +775,38 @@ function buildStack(spec) {
         const total = vals.reduce((t, v) => (v == null ? t : (t || 0) + v), null);
         return [String(c), ...vals.map((v) => cell(v, tf)), ...(multi ? [cell(total, tf)] : [])];
       }),
+    },
+  };
+}
+
+// A part-to-whole for the selected cycle, or for every cycle up to it in the Cumulative view. Slices are % keys that add
+// up to 100; spec.total is the count key the percentages are of, so the hover and the table also give page counts.
+function buildPie(spec) {
+  const view = state.view === "cum" ? "cum" : "per";
+  const i = cycleIndex();
+  const slices = [];
+  let cum = view === "cum";
+  for (const s of spec.series) {
+    const r = pick(s, view);
+    if (!r) continue;
+    cum = cum && r.cum;
+    slices.push({ label: s.label, value: r.values[i], slot: s.slot });
+  }
+  if (!slices.length) return { empty: spec.emptyText || "Not available for this run.", gap: false };
+  if (slices.every((s) => s.value == null)) return { empty: `Nothing for cycle ${state.cycle}.`, gap: false };
+  const tot = pick(spec.total, cum ? "cum" : "per");
+  const total = tot ? tot.values[i] : null;
+  for (const s of slices) s.count = total != null && s.value != null ? Math.round((total * s.value) / 100) : null;
+  const first = DATA.cycles.find((c, k) => (pick(spec.total, "per")?.values[k] ?? null) != null);
+  const height = spec.height || 300;
+  return {
+    badge: state.view === "cum" && !cum ? "per cycle only" : null,
+    sub: (cum ? `Cycles ${first}–${state.cycle}` : `Cycle ${state.cycle}`) + (spec.sub ? ` · ${spec.sub}` : ""),
+    height,
+    draw: (host) => Charts.pie(host, { name: spec.title, slices, height, center: total != null ? `<b>${F.count(total)}</b><br>pages` : "" }),
+    table: {
+      columns: [spec.sliceHead || "Slice", "% of pages", "Pages"],
+      rows: slices.map((s) => [s.label, cell(s.value, F.pct), cell(s.count, F.int)]),
     },
   };
 }
@@ -855,7 +917,7 @@ function buildTableLine(spec) {
 }
 
 const BUILDERS = {
-  line: buildLine, stack: buildStack, hist: buildHist, bars: buildBars, tableLine: buildTableLine,
+  line: buildLine, stack: buildStack, pie: buildPie, hist: buildHist, bars: buildBars, tableLine: buildTableLine,
   note: (spec) => ({ note: spec.text, gap: true }),
 };
 
@@ -1093,7 +1155,7 @@ function sectionStatus() {
   }
   if (DomainMetrics.domains(DATA, state.cycle).length) hasData.add("explorer");
   if (Raw.has(state.run)) hasData.add("raw");
-  if (Junk.has(state.run)) hasData.add("junk");
+  if (Junk.has(state.run) || has(metric("pipeline/docs"))) hasData.add("junk");
   return { gaps, hasData };
 }
 
@@ -1112,8 +1174,9 @@ function renderSections() {
         { class: "sec", id: sec.id, "aria-labelledby": sec.id + "-h" },
         html("h2", { id: sec.id + "-h", text: sec.title }),
         sec.blurb && html("p", { class: "blurb", text: sec.blurb }),
-        sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && html("p", { class: "blurb", text: sec.cacheNote }),
-        sec.id === "explorer" ? renderExplorer() : sec.id === "raw" ? renderRaw() : sec.id === "junk" ? renderJunk() : renderSectionFigures(sec)
+        // runs whose domain keys already add the replayed pages (extra.py) don't need the warning
+        sec.cacheNote && has(metric("cache/replayed_pct_of_pages")) && !DATA.replays && html("p", { class: "blurb", text: sec.cacheNote }),
+        sec.id === "explorer" ? renderExplorer() : sec.id === "raw" ? renderRaw() : sec.id === "junk" ? renderJunkSection() : renderSectionFigures(sec)
       )
     );
   } else {
@@ -1326,16 +1389,48 @@ function openPanel(title, fill, opener) {
   document.addEventListener("keydown", onKey);
 }
 
+// Junk check: the pipeline counts over every crawled page (when Jerry's pipeline processed this crawl), then the
+// per-page junk analysis of the sampled text.
+function renderJunkSection() {
+  // A run with sampled pages: one switch (whole page / main content) runs the whole section, every-page part included
+  if (Junk.has(state.run)) return renderJunk();
+  const parts = [];
+  if (has(metric("pipeline/docs"))) {
+    parts.push(html("h3", { class: "subhead", text: "Every crawled page, from Jerry's pretraining pipeline" }));
+    parts.push(renderSectionFigures({ id: "junk-pipeline", charts: PIPELINE_CHARTS }));
+  } else {
+    parts.push(html("p", { class: "empty", text: "Jerry's pretraining pipeline hasn't counted this run's pages through its rules, so there is no every-page breakdown here." }));
+  }
+  parts.push(html("h3", { class: "subhead", text: "Sampled pages, by score and priority" }));
+  parts.push(renderJunk());
+  return html("div", {}, ...parts);
+}
+
 function renderJunk() {
   if (!Junk.has(state.run)) {
-    return html("p", { class: "empty", text: `No page-text sample for this run. The junk check covers ${runsWith(Junk.has).join("; ")}, three sampled cycles each.` });
+    return html("p", { class: "empty", text: `No page-text sample for this run. The junk check covers ${runsWith(Junk.has).join("; ")}, every cycle.` });
   }
   // Ticking a rule redraws the section and keeps the choice in the link.
   const rerender = () => {
     renderSections();
     syncUrl();
   };
-  return Junk.render({ run: state.run, button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
+  // Main content view only: Jerry's exact counts over every page (his DCLM rules, dedup and fastText cut), which no
+  // toggle changes; the toggled pies above them come from the sample (junk.js)
+  const exact = (view) => {
+    if (view !== "resil") return null;
+    return html("div", { class: "junk-exact" }, html("h3", { class: "subhead", text: "Exact counts from Jerry's pretraining pipeline" }),
+      html("p", { class: "explorer-note", text: "Every page with text, counted by Jerry's pipeline: his English filter, DCLM-Baseline's rules as written (a page under the first rule it fails), dedup and the fastText cut. These are exact and don't change with the toggles above." }),
+      has(metric("pipeline/docs")) ? renderSectionFigures({ id: "junk-pipeline", charts: PIPELINE_CHARTS })
+        : html("p", { class: "empty", text: "Jerry's pretraining pipeline hasn't counted this run's pages through its rules." }));
+  };
+  const valueAt = (key, cycle) => {
+    const i = DATA.cycles.indexOf(cycle);
+    const v = DATA.metrics[key];
+    return i < 0 || !v ? null : v[i] ?? null;
+  };
+  return Junk.render({ run: state.run, cycle: state.cycle, cum: state.view === "cum", valueAt, exact,
+    button, schedule: (host, draw) => schedule(host, draw, lazy), rerender });
 }
 
 let rawProbe = null; // the other runs' raw-data indexes, loaded once to say which runs have the section
@@ -1357,7 +1452,7 @@ const EXPLORER_MODES = {
   correlation: { label: "Priority correlation", fields: ["spearman", "pearson", "pairs"] },
 };
 const DOMAIN_FIELDS = {
-  pages: ["HTTP 200 pages", "count"], en: ["English pages (parsed)", "count"], edu: ["FineWeb-Edu", "score"], ft: ["fastText", "score"],
+  pages: ["Pages fetched", "count"], en: ["English pages (parsed)", "count"], edu: ["FineWeb-Edu", "score"], ft: ["fastText", "score"],
   httpErrors: ["HTTP 4xx/5xx", "count"], failures: ["Failed attempts", "count"], failureRate: ["Failure rate", "pct"],
   attempts: ["Attempts", "count"], budget: ["Allocated budget", "count"], budgetUse: ["Budget attempted", "pct"],
   outlinks: ["Outlinks", "count"], distinctOutlinks: ["Distinct outlinks", "count"],
@@ -1422,7 +1517,7 @@ function renderExplorer() {
   const status = html("span", { class: "count", role: "status" });
   const output = html("div");
   const explanations = {
-    overview: "The two page counts come from different files. HTTP 200 pages are counted in the cycle's WARC index; English pages are parsed pages the scorer rated English. They don't always agree per domain: some domains show more English pages than 200s (igenea.com in crawl 233150, for example), because a page is counted again each time another URL redirects to it; the Raw data check section shows this per domain. Each list is a top 50, so a dash means the domain wasn't in that list, not zero.",
+    overview: "The two page counts come from different files. Pages fetched are the HTTP 200s in the cycle's WARC index, plus, where the domain charts' note says so, the pages replayed from the fetch cache (they have no WARC record); English pages are parsed pages the scorer rated English. They don't always agree per domain: some domains show more English pages than pages fetched (igenea.com in crawl 233150, for example), because a page is counted again each time another URL redirects to it; the Raw data check section shows this per domain. Each list is a top 50, so a dash means the domain wasn't in that list, not zero.",
     failures: "HTTP errors cover recorded 4xx/5xx responses only. Failed attempts also include other download failures when logged. Failure rate = failed attempts ÷ attempts; budget attempted = attempts ÷ allocated budget. No per-domain budget is inferred from the run-wide cap.",
     links: "Outlinks are links extracted from pages on the source domain, not inbound links to that domain. Counts alone do not measure content quality; distinct outlinks indicate breadth.",
     correlation: "Priority versus fetched-page score within each domain. Signed correlations range from −1 to +1; lowest means most negative. Rankings require at least 3 scored pairs. They are descriptive, not a significance test; pair counts matter.",
@@ -1571,45 +1666,140 @@ function mergeExtra(d, x) {
     const at = new Map(from.map((c, i) => [c, values[i]]));
     return cycles.map((c) => (at.has(c) ? at.get(c) : null));
   };
+  // W&B's own keys win, except under the extra file's override prefixes (its values replace W&B's in every cycle; W&B
+  // keys there that the file lacks go too, so one chart never mixes the two counts) and fill prefixes (its values go
+  // only where W&B has none: d.filledFrom[k] = the first such cycle).
+  const under = (list, k) => (list || []).some((p) => k.startsWith(p));
   d.extraKeys = [];
+  d.overriddenKeys = [];
+  d.filledFrom = {};
   for (const part of ["metrics", "histograms"]) {
-    for (const k of Object.keys(d[part])) d[part][k] = remap(d[part][k], d.cycles);
+    for (const k of Object.keys(d[part])) {
+      if (under(x.override, k)) {
+        delete d[part][k];
+        d.overriddenKeys.push(k);
+      } else d[part][k] = remap(d[part][k], d.cycles);
+    }
     for (const [k, v] of Object.entries(x[part] || {})) {
-      if (k in d[part]) continue;
-      d[part][k] = remap(v, x.cycles);
+      const ours = remap(v, x.cycles);
+      if (k in d[part]) {
+        if (!under(x.fill, k)) continue;
+        const i = d[part][k].findIndex((w, j) => w == null && ours[j] != null);
+        if (i < 0) continue;
+        d[part][k] = d[part][k].map((w, j) => (w == null ? ours[j] : w));
+        d.filledFrom[k] = cycles[i];
+        continue;
+      }
+      d[part][k] = ours;
       d.extraKeys.push(k);
+    }
+  }
+  for (const k of Object.keys(d.tables)) {
+    if (under(x.override, k)) {
+      delete d.tables[k];
+      d.overriddenKeys.push(k);
     }
   }
   for (const [k, v] of Object.entries(x.tables || {})) {
     if (!(k in d.tables)) {
       d.tables[k] = v;
       d.extraKeys.push(k);
+    } else if (under(x.fill, k)) {
+      const add = Object.keys(v).filter((c) => !(c in d.tables[k])).map(Number);
+      if (!add.length) continue;
+      d.tables[k] = { ...v, ...d.tables[k] };
+      d.filledFrom[k] = Math.min(...add);
     }
   }
   d.cycles = cycles;
+  d.overriddenKeySet = new Set(d.overriddenKeys);
+  // the extra file's own newest complete cycle (half its keys or more): a run whose W&B logging stopped early (the
+  // CC-style crawl logs only timing after cycle 72) is complete as far as the crawl was read
+  const xm = Object.values(x.metrics || {});
+  const have = (x.cycles || []).map((_, i) => xm.filter((v) => v[i] != null).length);
+  const most = Math.max(0, ...have);
+  const lastFull = have.findLastIndex((n) => most && n >= most / 2);
+  d.extraLatest = lastFull >= 0 ? x.cycles[lastFull] : null;
   d.extraSource = x.source;
   d.extraOnly = x.only || null;
   d.extraKeySet = new Set(d.extraKeys);
   d.textSample = x.text_sample || null;
+  d.textNote = x.text_note || null; // a run whose text keys come from another sample says so itself
+  d.replays = !!x.replays; // domain keys include the pages replayed from the fetch cache
+  d.pipelinePartial = x.pipeline_partial || []; // cycles Jerry's pipeline holds only part of: no per-cycle values
+  d.gaps = x.gaps || {}; // key family -> cycles with no input: its running totals stop there
+  d.overrideNote = x.override_note || null; // why the overridden keys (other than domains/) replace W&B's
 }
 
-// Where a chart's numbers come from when the run doesn't log them to W&B: the text keys from the sample of each cycle's
-// pages (every 10th part, counts scaled up), the HTTP and domain keys from the whole WARC index, priority vs score
+// Where a chart's numbers come from when the run doesn't log them to W&B: the text keys from each cycle's pages (every
+// part, or every 10th with counts scaled up, as text_sample says), the HTTP and domain keys from the whole WARC index, priority vs score
 // from the whole fetch list and parse data. Empty when every key is the run's own W&B key.
 function sourceNote(d, keys) {
   if (!d || !d.extraKeySet) return "";
   const used = keys.filter((k) => d.extraKeySet.has(k));
-  if (!used.length) return "";
+  const filled = keys.filter((k) => d.filledFrom && k in d.filledFrom);
+  if (!used.length && !filled.length) return "";
+  if (used.some((k) => k.startsWith("pipeline/"))) {
+    const part = d.pipelinePartial || [];
+    const partNote = part.length
+      ? ` His pipeline holds only a small part of cycle${part.length > 1 ? "s" : ""} ${part.join(" and ")}, so ${part.length > 1 ? "they have" : "it has"} no per-cycle values; ${part.length > 1 ? "their" : "its"} pages still count in the cumulative view.`
+      : "";
+    return "counted from Jerry's pretraining pipeline over every page of the cycle that has text (his main-content extraction, fetch-cache pages included). DCLM-Baseline's rules run in DCLM's order, so a page counts under the first rule it fails; duplicates are from his dedup over the whole cycle group." + partNote;
+  }
+  const ours = used.length ? used : filled;
+  let lead;
+  if (used.some((k) => d.overriddenKeySet && d.overriddenKeySet.has(k))) {
+    lead = used.some((k) => k.startsWith("domains/")) && d.replays
+      ? "the run's W&B values count only pages with a WARC record, so these are counted again: "
+      : `${d.overrideNote || "recounted in place of the run's W&B values"}: `;
+  } else if (used.length) lead = "not logged to W&B; ";
+  else {
+    const from = Math.min(...filled.map((k) => d.filledFrom[k]));
+    lead = `as logged to W&B where the run logged them; the other cycles (from cycle ${from}) `;
+  }
+  let note = lead + extraOrigin(d, ours);
+  // a family missing a cycle of input: its running totals can't go on past it (extra.py leaves them out)
+  const why = { "fetch/": "no WARC index survives for", "domains/": "no WARC index or replay count exists for", "text/": "no page text was read for" };
+  for (const [fam, missing] of Object.entries(d.gaps || {})) {
+    const cum = keys.filter((k) => k.startsWith(fam) && k.endsWith("_cumulative") && d.metrics[k]);
+    if (!cum.length) continue;
+    const last = Math.max(...cum.map((k) => d.cycles[d.metrics[k].findLastIndex((v) => v != null)] || 0));
+    note += ` Running totals end at cycle ${last}: ${why[fam] || "there is no input for"} cycle${missing.length > 1 ? "s" : ""} ${cycleRanges(missing)}.`;
+  }
+  return note;
+}
+
+// Where the extra file's keys come from, as the end of a sentence.
+function extraOrigin(d, used) {
+  const text = used.some((k) => /^text(_summary)?\//.test(k));
+  // textNote describes the second text source, which gives only the page-score keys (extra.py TEXT_SCORE_KEYS)
+  if (d.textNote && used.some((k) => /^text\/(fasttext_quality|fineweb_edu)/.test(k))) return d.textNote;
   const s = d.textSample;
-  if (s && used.some((k) => /^text(_summary)?\//.test(k))) {
+  if (s && text) {
+    if (s.parts >= s.parts_total) return "read from every part of each cycle's pages: every page the crawl parsed.";
     const f = s.parts_total / s.parts;
-    return `not logged to W&B; read from ${s.parts} of ${s.parts_total} parts (about 1 in ${Math.round(f)}) of each cycle's pages, with counts scaled up ×${f.toFixed(1)}, and means and shares as in the sample.`;
+    return `read from ${s.parts} of ${s.parts_total} parts (about 1 in ${Math.round(f)}) of each cycle's pages, with counts scaled up ×${f.toFixed(1)}, and means and shares as in the sample.`;
   }
-  if (used.some((k) => k.startsWith("frontier/"))) return "not logged to W&B; read from each cycle's whole fetch list and parse data.";
+  if (used.some((k) => k.startsWith("frontier/"))) return "read from each cycle's whole fetch list and parse data.";
+  const plusCache = d.replays ? " plus the pages replayed from the fetch cache, which have no WARC record" : "";
   if (used.some((k) => k.startsWith("domains/rank_") || k === "domains/score_by_rank")) {
-    return "not logged to W&B; ranks and page shares from each cycle's whole WARC index, page scores from every parsed page of the domains with 3 or more pages.";
+    return `ranks and page shares from each cycle's whole WARC index${plusCache}, page scores from every parsed page of the domains with 3 or more pages.`;
   }
-  return "not logged to W&B; read from each cycle's whole WARC index.";
+  if (used.some((k) => k.startsWith("cache/"))) return "counted from every parse record of the cycle: pages with no WARC record were replayed from the fetch cache.";
+  if (used.some((k) => k.startsWith("domains/"))) return `read from each cycle's whole WARC index${plusCache}.`;
+  return "read from each cycle's whole WARC index.";
+}
+
+// [30, 31, 32, 65, 68] -> "30–32, 65 and 68"
+function cycleRanges(cs) {
+  const parts = [];
+  for (const c of [...cs].sort((a, b) => a - b)) {
+    const last = parts[parts.length - 1];
+    if (last && c === last[1] + 1) last[1] = c;
+    else parts.push([c, c]);
+  }
+  const t = parts.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`));
+  return t.length > 1 ? `${t.slice(0, -1).join(", ")} and ${t[t.length - 1]}` : t[0];
 }
 const capital = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
@@ -1695,7 +1885,8 @@ async function switchRun() {
 function latestCompleteCycle(data) {
   const counts = data.cycles.map((_, i) => Object.values(data.metrics).filter((v) => v[i] != null).length);
   const full = Math.max(...counts);
-  for (let i = counts.length - 1; i >= 0; i--) if (counts[i] >= full / 2) return data.cycles[i];
+  const own = data.extraLatest || 0; // newest cycle the extra file (our read of the crawl) has complete
+  for (let i = counts.length - 1; i >= 0; i--) if (counts[i] >= full / 2) return Math.max(data.cycles[i], own);
   return data.cycles.at(-1);
 }
 

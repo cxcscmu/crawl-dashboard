@@ -27,26 +27,26 @@ Each run becomes `site/data/<run>.js`, and `site/data/runs.js` lists them for th
 
 ## Raw data check (optional)
 
-The **Raw data check** section doesn't come from W&B. It shows numbers read straight from a crawl's segments and WARC index on the cluster: per-domain count mismatches and their cause, priority vs page score, fetch outcomes, links, and example pages with their text. `rawdata.py` builds its files from the per-cycle extracts (kept outside this repo, in `~/crawl-data` by default):
+The **Raw data check** section doesn't come from W&B. It shows numbers read straight from a crawl's segments and WARC index on the cluster: per-domain count mismatches and their cause, priority vs page score, fetch outcomes, links, and example pages with their text. `rawdata.py` builds its files from the per-cycle extracts (`<src>/<prefix>-c<N>/`, written on the cluster):
 
 ```bash
 .venv/bin/pip install pandas
-.venv/bin/python rawdata.py crawl-233150 233150 1-9    # run id on the page, folder prefix, cycles
+.venv/bin/python rawdata.py crawl-233150 233150 1-9 --src ~/crawl-data/v2    # run id on the page, folder prefix, cycles
 ```
 
-This writes `site/data/raw/crawl-233150.js` plus one folder of domain tables and example pages. A run without these files simply has an empty Raw data check tab.
+This writes `site/data/raw/<run>.js` plus a folder of per-cycle domain tables and example pages. A run without these files simply has an empty Raw data check tab.
 
-A long crawl would not fit the site's 1 GB at full size (233150's 9 cycles take 475 MB), so the three newer crawls are built trimmed: every cycle's summary, domain tables cut to the 3,000 domains with the most pages, the whole-cycle example pages in every cycle, and the per-domain example pages for three cycles only, all with their first 1,500 characters. Their per-URL files aren't downloaded, so the repeat-record and bot-page counts are left out. The notes on priority and on the per-domain fetch-list limit follow each crawl:
+Every crawl and cycle at full size would not fit the site's 1 GB (every domain alone is about 15–16 GB), so the published build keeps each cycle's 3,000 domains with the most pages and no example pages; each cycle's own numbers still count every domain, and the page says what is left out. It runs on Boston, which has the extracts' `urls/` files, for every crawl and cycle, with each crawl's notes on priority, the per-domain fetch-list limit and the page score (`rawdata_run_all.sh` and `rawdata_run_fix.sh`, kept with the cluster jobs in `~/crawl-data/extract-src`). For example:
 
 ```bash
 OPIC="its OPIC cash, which the pages linking to it pass on, weighted by their page score"
 SEED=" The seeds already hold different amounts of cash in the first cycle."
-.venv/bin/python rawdata.py crawl-259887 259887 1-50 --src ~/crawl-data/v2 --label "crawl 259887" --max-domains 3000 --text-chars 1500 --example-cycles 5,25,50 --priority-def "$OPIC" --list-limit "up to the domain's Common Crawl limit, set from its harmonic-centrality rank" --seed-note "$SEED"
-.venv/bin/python rawdata.py crawl-265639 265639 1-47 --src ~/crawl-data/v2 --label "crawl 265639" --max-domains 3000 --text-chars 1500 --example-cycles 5,25,47 --priority-def "$OPIC" --seed-note "$SEED"
-.venv/bin/python rawdata.py crawl-269821 269821 1-26 --src ~/crawl-data/v2 --label "crawl 269821" --max-domains 3000 --text-chars 1500 --example-cycles 5,15,26 --priority-def "its TrustRank-style cash, passed on from the seeds and shrinking by 0.85 at each link step" --seed-note ""
+python rawdata.py crawl-265639 265639 1-47 --src $B/v2 --out $P/rawdata/out --max-domains 3000 --no-examples --label "crawl 265639" --priority-def "$OPIC" --seed-note "$SEED" --procs 8
 ```
 
-To put a new build on the live page, replace the release file the publish job downloads (the next hourly run picks it up):
+`--procs` builds that many cycles at once, and `--score-def` says what the page score is in a crawl (prod: "its fastText quality score"). Crawls whose crawler tags no page languages (the CC-style crawl, TrustRank, plain OPIC) leave out the English and bot-check columns and say so. Without `--max-domains` and `--no-examples` you get the full version, which goes to Hugging Face rather than this site.
+
+To put a new build on the live page, replace the release file the publish job downloads. It holds all of `site/data/raw` (the Raw data check, `extra-*.js` and the junk files); the next hourly run, or a push, picks it up:
 
 ```bash
 tar czf raw-data.tar.gz -C site/data raw
@@ -57,29 +57,44 @@ A published GitHub Pages site can be at most 1 GB, so keep `site/data/raw` well 
 
 ## Keys a run doesn't log (optional)
 
-Crawls 259887, 265639 and 269821 log only the wall-clock keys (`wall/*`) to W&B. `extra.py` fills in their HTTP, domain, language, page-length and score keys from our own read of the crawl (the cluster jobs `run_cdx.sbatch` and `run_text.sbatch`, kept with the extracts in `~/crawl-data`). It calls the same functions of Jerry's `crawl_logger.py` that make the W&B keys, so the charts read them unchanged:
+Crawls 259887, 265639, 269821 and 271533 log only the wall-clock keys (`wall/*`) to W&B. `extra.py` fills in their HTTP, domain, language, page-length and score keys from our own read of the crawl (the cluster jobs `run_cdx.sbatch` and `run_text.sbatch`, kept with the extracts in `~/crawl-data`). It calls the same functions of Jerry's `crawl_logger.py` that make the W&B keys, so the charts read them unchanged:
 
 ```bash
-~/crawl-data/py/bin/python extra.py crawl-259887 259887 crawl-265639 265639 crawl-269821 269821
+~/crawl-data/py/bin/python extra.py crawl-259887 259887 crawl-265639 265639 crawl-269821 269821 crawl-271533 271533
 ```
 
-Each run gets `site/data/raw/extra-<run>.js`, which ships in the same raw-data release as above. The top-domain tables (English pages, FineWeb-Edu) come from the extract's per-domain counts of every parsed page, and the domains with the most error responses from the WARC index; on 233150 the top-domain tables match W&B exactly. The page adds only keys W&B doesn't have, so a backfilled W&B run takes over by itself. The text keys come from every 10th part of each cycle's segment; their counts are scaled up, and the means and shares are the sample's own. Checked against crawl 233150, which logs everything: domains and HTTP shares match exactly, and score means are within about 1%.
+Each run gets `site/data/raw/extra-<run>.js`, which ships in the same raw-data release as above. The top-domain tables (English pages, FineWeb-Edu) come from the extract's per-domain counts of every parsed page, and the domains with the most error responses from the WARC index; on 233150 the top-domain tables match W&B exactly. The page adds only keys W&B doesn't have, so a backfilled W&B run takes over by itself. Checked against crawl 233150, which logs everything: domains and HTTP shares match exactly, and score means are within about 1%.
+
+The text keys come from every 10th part of each cycle's segment, scaled up, unless `--text-from <prefix>all` points at the same job run on every part (exact counts, nothing scaled); the page's note says which. `--override <key prefixes>` uses our keys in every cycle (the CC-style crawl's domain keys, which W&B counts from the WARC index alone), `--fill <key prefixes>` only in cycles W&B has no value for, and `CRAWL_DATA=<dir>` reads the inputs from somewhere other than `~/crawl-data` (on Boston).
 
 ## Junk check (optional)
 
-The **Junk check** section shows how much of the crawled text is junk and how that changes with the fastText, FineWeb-Edu and page scores and with priority. It reads page text sampled on the cluster from three cycles each of crawls 233150, 259887 and 265639: every high-score page (combined ≥ 0.95, fastText ≥ 0.5 or FineWeb-Edu ≥ 0.6) and 1 in 10 of the rest, from every 10th part of a cycle's segment. Rates are weighted by how pages were sampled.
+The **Junk check** section shows how much of every crawl is junk, every cycle, by DCLM-Baseline's rules (`dclm_baseline_refinedweb_post_lang.yaml`, ported from mlfoundations/dclm) plus two of ours (`junk/`), and how that changes with the fastText, FineWeb-Edu and page scores and with priority. One switch picks the text:
 
-The rules are DCLM-Baseline's (`dclm_baseline_refinedweb_post_lang.yaml`, ported from mlfoundations/dclm) plus two of ours, in `junk/`:
+- **Whole page (Nutch):** the crawler's parse text, what it scores and ranks by. Sampled from every 10th part of each cycle's segment: every page with a high crawler score (page score ≥ 0.95, fastText ≥ 0.5 or FineWeb-Edu ≥ 0.6) and 1 in 10 of the rest, weighted by how they were sampled. English means the crawler's own English tag, so its bot-check pages aren't in it. Crawls that stored no scores are scored with the crawler's own models and rules (`score_sample.py`).
+- **Main content (Resiliparse):** the main-content text of Jerry's pretraining pipeline, what training uses: every 10th shard of each cycle and 1 in 10 of its pages. Scores are the crawler's models on this text under the crawler's rules: bot-check pages get no score (the crawler's own tag where it ran the scorer, else its rule run on the text).
+
+It is built on Boston by cluster jobs kept in `~/crawl-data/extract-src` (with copies of `junk/`):
 
 ```bash
-cd junk
-~/crawl-data/py/bin/python junk.py         # every rule for every sampled page -> ~/crawl-data/analysis/junk/pages.pkl
-~/crawl-data/py/bin/python junk_ngram.py   # the n-gram check for pages stopped at a duplicate-line check
-~/crawl-data/py/bin/python junk_rep.py     # each page's repetition level, whole text and 6+ word lines
-cd .. && ~/crawl-data/py/bin/python junkdata.py   # -> site/data/raw/junk.js
+junk_sample.py <out> <scored sample files>          # whole page: every rule for every sampled page
+junk_main.py <out> <crawl id>                       # main content: rules and scores for every sampled page
+junk_botcheck.py <out> <crawl id>                   # main content: the crawler's bot-check rule on the same pages
+junkpage.py <out> nutch|resil <crawl id> <prefix>   # the page's files for one run and text
 ```
 
-`junkdata.py` also needs each page's priority (`priority.pkl`, from the extract's `urls/` files) and Jerry's score percentile tables (`pipeline/crawl/cdf`). Readers tick which rules count as junk, with a looser threshold for the n-gram rule if they like, and an extra rule for pages under 10 words that no preset uses; three presets set the page rules alone, the page rules plus repeated n-grams on lines of 6+ words, and every DCLM rule as written. Every rate is recomputed in the browser from `site/data/raw/junk/<run>.js` (one entry per sampled page, about 1.3 MB per crawl, loaded when the tab opens); without that file the presets still work from `junk.js`. On our parse text, which keeps the whole page, DCLM's repetition and line rules mostly react to menus. `junk.js` ships in the raw-data release with the other files in `site/data/raw/`.
+`junkpage.py` writes `site/data/raw/junk/<run>/<nutch|resil>/`:
+- `c<N>.js`: one cycle's sampled pages as compact arrays, so the browser recomputes every rate for whatever rules are ticked;
+- `all.js`: a uniform subsample of up to 400k pages from every cycle, for the cumulative view;
+- `index.js`: the junk share per preset and rule over cycles, example pages, and each run's own score percentile cuts.
+
+`site/data/raw/junk/runs.js` lists the runs and texts that have files:
+
+```bash
+python3 -c 'import json,os; d="site/data/raw/junk"; r={x: sorted(v for v in ("nutch","resil") if os.path.exists(f"{d}/{x}/{v}/index.js")) for x in sorted(os.listdir(d)) if os.path.isdir(f"{d}/{x}")}; open(f"{d}/runs.js","w").write("window.CRAWL_JUNK_RUNS="+json.dumps(r,separators=(",",":"))+";\n")'
+```
+
+Readers tick which rules count as junk (three presets: the page rules, plus repeated n-grams on lines of 6+ words, every DCLM rule as written) and pick what a high score is: the training cut (fastText ≥ 0.018112), the run's own top 1/5/10%/half, or a fixed score at ClueWeb22's percentiles. The pies take each cycle's English share from every page (the text job, or Jerry's pipeline counts) and the junk split from the sample. On whole-page text DCLM's repetition and line rules mostly react to menus. `junkdata.py` and `junk.py`'s `pages.pkl` steps are the earlier three-cycle build, replaced by the jobs above.
 
 ## View it
 
