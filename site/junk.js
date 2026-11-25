@@ -190,23 +190,33 @@ const Junk = (() => {
       : s === "combined" ? (I.band_edges || [0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 0.99])[e] : I.cw_cuts?.[s]?.[e] ?? null;
     return { kind, n, band, thr };
   }
+  // "Top x% of this run": the real share of the run's pages at or above the cut (junkpage own_share) when ties at the
+  // cut keep it more than half a point off the nominal one. Over half the whole-page fastText scores are exactly 0, so
+  // no cut splits them in half: the closest is "above 0", about 44–47% of a run.
+  function ownTop(I, n, s) {
+    const real = I.own_share?.[srcKey()]?.[s]?.[TOP_BAND[n] - 1];
+    return real != null && Math.abs(real - (n === "50" ? 50 : +n)) > 0.5 ? `${Math.round(real)}%` : topWord(n);
+  }
+  // the smallest stored fastText score above 0 (6 decimals) reads as "above 0"
+  const atLeast = (v) => (v == null ? "≥ —" : v > 0 && v <= 1e-6 ? "above 0" : `≥ ${num(v)}`);
   function cutLabel(I, c, s) {
     const x = cutOf(I, c, s), S = SCORE_WORD[s];
     if (x.kind === "train") return `The training cut: fastText ≥ ${TRAIN_CUT}`;
-    if (x.kind === "own") return `Top ${topWord(x.n)} of this run: ${S} ≥ ${x.thr == null ? "—" : num(x.thr)}`;
+    if (x.kind === "own") return `Top ${ownTop(I, x.n, s)} of this run: ${S} ${atLeast(x.thr)}`;
     return s === "combined" ? `Page score ≥ ${x.thr.toFixed(2)}` : `${HI_SCORES[s]} ≥ ${x.thr == null ? "—" : num(x.thr)}: ClueWeb22's top ${topWord(x.n)}`;
   }
   // the cutoff in words, and "<score> ≥ / < <value>" for the pie slices
   function hiText(I) {
     const x = cutOf(I), S = SCORE_WORD[sel.hiScore], v = x.thr == null ? "—" : num(x.thr);
     if (x.kind === "train") return `fastText ≥ ${TRAIN_CUT}, the training cut Jerry's pipeline keeps pages by`;
-    if (x.kind === "own") return `${S} ≥ ${v}, this run's top ${topWord(x.n)} of English pages`;
+    if (x.kind === "own") return `${S} ${atLeast(x.thr)}, this run's top ${ownTop(I, x.n, sel.hiScore)} of English pages`;
     return sel.hiScore === "combined" ? `page score ≥ ${x.thr.toFixed(2)}` : `${S} ≥ ${v}, ClueWeb22's top ${topWord(x.n)}`;
   }
   const hiCmp = (I, sign) => {
-    const x = cutOf(I);
+    const x = cutOf(I), S = SCORE_WORD[sel.hiScore];
+    if (x.kind === "own" && x.thr > 0 && x.thr <= 1e-6) return sign === "<" ? `${S} 0` : `${S} above 0`;
     const v = x.thr == null ? "—" : x.kind === "train" ? String(TRAIN_CUT) : sel.hiScore === "combined" && x.kind === "cw" ? x.thr.toFixed(2) : num(x.thr);
-    return `${SCORE_WORD[sel.hiScore]} ${sign} ${v}`;
+    return `${S} ${sign} ${v}`;
   };
   let urlRead = false;
 
@@ -434,7 +444,7 @@ const Junk = (() => {
   function hiShort(I) {
     const x = cutOf(I);
     if (x.kind === "train") return "fastText ≥ 0.018112 (the training cut)";
-    if (x.kind === "own") return `${SCORE_WORD[sel.hiScore]} top ${topWord(x.n)} of this run`;
+    if (x.kind === "own") return `${SCORE_WORD[sel.hiScore]} top ${ownTop(I, x.n, sel.hiScore)} of this run`;
     return sel.hiScore === "combined" ? `page score ≥ ${x.thr.toFixed(2)}` : `${HI_SCORES[sel.hiScore]} in ClueWeb22's top ${topWord(x.n)}`;
   }
   // Short labels (the bar lists truncate long ones); the chart's subtitle says which scale ("of this run" / ClueWeb22).
@@ -442,10 +452,10 @@ const Junk = (() => {
     if (g === "ft_top1" || g === "edu_top1") return `${g === "ft_top1" ? "fastText" : "FineWeb-Edu"} top 1%`;
     if (g === "hi") return `High score: ${hiShort(I)}`;
     const x = cutOf(I);
-    const top = `top ${topWord(x.n)}`;
-    if (g === "ft_hi") return `fastText ${top}`;
-    if (g === "edu_hi") return `FineWeb-Edu ${top}`;
-    if (g === "comb_hi") return x.kind === "cw" ? `Page score ≥ ${cutOf(I, x.kind + x.n, "combined").thr.toFixed(2)}` : `Page score ${top}`;
+    const top = (s) => `top ${x.kind === "own" ? ownTop(I, x.n, s) : topWord(x.n)}`; // the real share where ties move it
+    if (g === "ft_hi") return `fastText ${top("fasttext")}`;
+    if (g === "edu_hi") return `FineWeb-Edu ${top("edu")}`;
+    if (g === "comb_hi") return x.kind === "cw" ? `Page score ≥ ${cutOf(I, x.kind + x.n, "combined").thr.toFixed(2)}` : `Page score ${top("combined")}`;
     if (g === "both") return "Both fastText and FineWeb-Edu";
     if (g === "ft_only") return "fastText only";
     if (g === "edu_only") return "FineWeb-Edu only";
