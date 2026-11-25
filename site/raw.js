@@ -113,6 +113,30 @@ const Raw = (() => {
     }
     return loads.get(src).then(ex);
   }
+  // A domain's numbers across every cycle (hist_packs.py on the cluster): one file of about 12 MB per group of domains,
+  // the domain's file is packOf(domain, meta.packs). The last HIST_KEPT files stay in memory.
+  const HIST_KEPT = 2;
+  const histOrder = []; // [{ src, key }]
+  async function loadHistory(run, domain) {
+    await loadFull(run).promise;
+    if (!fullOf(run)) return null;
+    const meta = await load(`${HF}${run}/hist/meta.js`, () => (window.CRAWL_RAW_HIST || {})[`${run}/meta`]);
+    if (!meta) return null;
+    const k = packOf(domain, meta.packs);
+    const key = `${run}/${k}`;
+    const src = `${HF}${run}/hist/h${String(k).padStart(3, "0")}.js`;
+    const pack = await load(src, () => (window.CRAWL_RAW_HIST || {})[key]);
+    if (!pack) return null;
+    if (!histOrder.some((h) => h.src === src)) {
+      histOrder.push({ src, key });
+      while (histOrder.length > HIST_KEPT) {
+        const old = histOrder.shift();
+        delete window.CRAWL_RAW_HIST[old.key];
+        loads.delete(old.src);
+      }
+    }
+    return { cols: meta.cols, rows: pack[domain] || [] };
+  }
   const loadExamples = (run, cycle, domain) => {
     const full = fullOf(run);
     const base = full ? `${HF}${run}` : `data/raw/${run}`;
@@ -437,25 +461,34 @@ const Raw = (() => {
           if (v == null || (isCorr && !(T.pairs[i] >= 30) && !q)) continue;
           rows.push([i, v]);
         }
-        rows.sort((a, b) => (ui.ascending ? a[1] - b[1] : b[1] - a[1]) || T.domain[a[0]].localeCompare(T.domain[b[0]]));
+        // ties in plain character order, as the cluster's site_tables.py ranks them to choose the rows the site keeps
+        const byName = (x, y) => (T.domain[x] < T.domain[y] ? -1 : T.domain[x] > T.domain[y] ? 1 : 0);
+        rows.sort((a, b) => (ui.ascending ? a[1] - b[1] : b[1] - a[1]) || byName(a[0], b[0]));
         const total = rows.length;
         rows = rows.slice(0, 100);
         const trimmed = R.domain_rows && !everyDomain;
         const inCycle = S.counts.domains_written;
-        status.textContent = trimmed
+        // rank_exact: the site keeps each column's top and bottom 100 over every domain (site_tables.py), so an
+        // unfiltered ranking is the cycle's true one; a search still covers only the kept rows
+        const rankExact = trimmed && R.rank_exact && !q;
+        status.textContent = rankExact
+          ? `Top 100, ranked over all ${F.int(inCycle)} domains in the cycle`
+          : trimmed
           ? (total > 100 ? `Top 100 of the ${F.int(total)} kept on the site` : `${F.int(total)} of those kept on the site`) + (inCycle ? `, of ${F.int(inCycle)} domains in the cycle` : "")
           : total > 100 ? `Top 100 of ${F.int(total)} domains` : `${F.int(total)} domain${total === 1 ? "" : "s"}`;
-        const exact = ui.sort === "cdx200" && !ui.ascending && !q;
+        const exact = rankExact || (ui.sort === "cdx200" && !ui.ascending && !q);
         warn.hidden = !trimmed || exact || !total;
-        warn.textContent = `This ranks only the ${F.int(T.domain.length)} domains the site keeps for this cycle (its biggest by HTTP 200s)` +
-          (inCycle ? `, not all ${F.int(inCycle)}` : "") + `, so it isn't the cycle's true ${ui.ascending ? "bottom" : "top"} 100. ` +
+        warn.textContent = (q && R.rank_exact
+          ? `The search covers the ${F.int(T.domain.length)} domains the site keeps for this cycle (each column's top and bottom 100, the biggest and the listed ones)${inCycle ? `, not all ${F.int(inCycle)}` : ""}. `
+          : `This ranks only the ${F.int(T.domain.length)} domains the site keeps for this cycle (its biggest by HTTP 200s)` +
+            (inCycle ? `, not all ${F.int(inCycle)}` : "") + `, so it isn't the cycle's true ${ui.ascending ? "bottom" : "top"} 100. `) +
           (RF ? "“Every domain” above ranks all of them." : "The full data, with every domain, is on Hugging Face; an “Every domain” button appears here when it's available.");
         output.textContent = "";
         if (!total) {
           const trimmed = R.domain_rows && !everyDomain;
           output.append(html("p", { class: "empty", text: !q ? "Nothing to rank for this cycle."
             : !trimmed ? "No domain with 3+ pages in this cycle matches."
-            : `No match among the site's copy of this cycle (its 3,000 biggest domains). ${RF ? "“Every domain” above searches all of them." : "The full data, with every domain, is on Hugging Face; an “Every domain” button appears here when it's available."}` }));
+            : `No match among the domains the site keeps for this cycle (${R.rank_exact ? "each column's top and bottom 100, the biggest and the listed ones" : "its 3,000 biggest"}). ${RF ? "“Every domain” above searches all of them." : "The full data, with every domain, is on Hugging Face; an “Every domain” button appears here when it's available."}` }));
           return;
         }
         const body = html("tbody");
@@ -519,10 +552,26 @@ const Raw = (() => {
     }
     const histBox = html("div");
     const history = html("details", { class: "domain-history" }, html("summary", { text: "Raw-data numbers across cycles" }), histBox);
-    history.addEventListener("toggle", () => {
+    history.addEventListener("toggle", async () => {
       if (!history.open || histBox.firstChild) return;
       histBox.append(html("p", { class: "empty", text: "Loading…" }));
+      // every cycle from the per-domain history on Hugging Face when it's there; else the site's per-cycle copy
+      const H = R.domain_rows ? await loadHistory(run, domain) : null;
+      if (H) {
+        histBox.textContent = "";
+        const byCycle = new Map(H.rows.map((r) => [r[0], r]));
+        Charts.table(histBox, {
+          columns: ["Cycle", ...H.cols.map((k) => COLS[k][0])],
+          rows: R.cycles.map((c) => {
+            const r = byCycle.get(c);
+            return [String(c), ...H.cols.map((k, j) => (r ? show(r[j + 1], COLS[k][1]) : "—"))];
+          }),
+        });
+        histBox.append(html("p", { class: "foot", text: "Every cycle, from the full data on Hugging Face: a dash means the domain had fewer than 3 pages in that cycle." }));
+        return;
+      }
       Promise.all(R.cycles.map((c) => loadDomains(run, c))).then((tables) => {
+        histBox.textContent = "";
         const keys = ["listed", "f_success", "cdx200", "records", "urls", "lang_en", "bot", "spearman"];
         Charts.table(histBox, {
           columns: ["Cycle", ...keys.map((k) => COLS[k][0])],
@@ -532,9 +581,9 @@ const Raw = (() => {
             return [String(c), ...keys.map((k) => (j < 0 || !available(t, k) ? "—" : show(value(t, k, j), COLS[k][1])))];
           }),
         });
-        histBox.append(html("p", { class: "foot", text: R.domain_rows
-          ? "From the site's copy, which keeps each cycle's 3,000 biggest domains: a dash means the domain had fewer than 3 pages in that cycle or wasn't among them."
-          : "A dash means the domain had fewer than 3 pages in that cycle." }));
+        histBox.append(html("p", { class: "foot", text: !R.domain_rows ? "A dash means the domain had fewer than 3 pages in that cycle."
+          : R.rank_exact ? "From the site's copy, which keeps each cycle's 1,000 biggest domains, each column's top and bottom 100 and the domains listed on the page: a dash means the domain wasn't among them in that cycle, or had fewer than 3 pages."
+          : "From the site's copy, which keeps each cycle's 3,000 biggest domains: a dash means the domain had fewer than 3 pages in that cycle or wasn't among them." }));
       });
     });
     panel.append(history);
