@@ -395,6 +395,7 @@ figure.card, #sections { scroll-margin-top: calc(var(--filter-height, 64px) + 24
 .raw-tiles { margin-bottom: 24px; }
 .raw-h { margin: 36px 0 12px; font-size: 16px; }
 .raw-cause { color: var(--ink-2); white-space: nowrap; }
+.raw-warn { margin: 8px 0 0; padding: 8px 12px; border-left: 3px solid var(--s4); background: color-mix(in srgb, var(--s4) 10%, transparent); color: var(--ink); }
 .raw-group { border-top: 1px solid var(--border); }
 .raw-group > summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: 13.5px; }
 .page-examples details > summary { cursor: pointer; color: var(--link); font-size: 12.5px; margin-top: 6px; }

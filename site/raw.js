@@ -412,7 +412,10 @@ const Raw = (() => {
         else every.textContent = "Couldn't load every domain";
       });
     });
-    box.append(modes, html("p", { class: "explorer-note", text: modeNote }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, every || null, status), output);
+    // A trimmed table ranks only the domains the site kept (the cycle's biggest by HTTP 200s): say so wherever the
+    // ranking isn't that one, so a "top 100" isn't read as the whole cycle's
+    const warn = html("p", { class: "foot raw-warn", hidden: true });
+    box.append(modes, html("p", { class: "explorer-note", text: modeNote }), html("div", { class: "search-row" }, search, html("label", { class: "field" }, "Rank by", sort), order, every || null, status), warn, output);
 
     loadDomains(ctx.run, cycle).then((table) => {
       if (!table) { status.textContent = "The domain table for this cycle couldn't be loaded."; return; }
@@ -437,9 +440,24 @@ const Raw = (() => {
         rows.sort((a, b) => (ui.ascending ? a[1] - b[1] : b[1] - a[1]) || T.domain[a[0]].localeCompare(T.domain[b[0]]));
         const total = rows.length;
         rows = rows.slice(0, 100);
-        status.textContent = total > 100 ? `Top 100 of ${F.int(total)} domains` : `${F.int(total)} domain${total === 1 ? "" : "s"}`;
+        const trimmed = R.domain_rows && !everyDomain;
+        const inCycle = S.counts.domains_written;
+        status.textContent = trimmed
+          ? (total > 100 ? `Top 100 of the ${F.int(total)} kept on the site` : `${F.int(total)} of those kept on the site`) + (inCycle ? `, of ${F.int(inCycle)} domains in the cycle` : "")
+          : total > 100 ? `Top 100 of ${F.int(total)} domains` : `${F.int(total)} domain${total === 1 ? "" : "s"}`;
+        const exact = ui.sort === "cdx200" && !ui.ascending && !q;
+        warn.hidden = !trimmed || exact || !total;
+        warn.textContent = `This ranks only the ${F.int(T.domain.length)} domains the site keeps for this cycle (its biggest by HTTP 200s)` +
+          (inCycle ? `, not all ${F.int(inCycle)}` : "") + `, so it isn't the cycle's true ${ui.ascending ? "bottom" : "top"} 100. ` +
+          (RF ? "“Every domain” above ranks all of them." : "The full data, with every domain, is on Hugging Face; an “Every domain” button appears here when it's available.");
         output.textContent = "";
-        if (!total) { output.append(html("p", { class: "empty", text: q ? "No domain with 3+ pages in this cycle matches." : "Nothing to rank for this cycle." })); return; }
+        if (!total) {
+          const trimmed = R.domain_rows && !everyDomain;
+          output.append(html("p", { class: "empty", text: !q ? "Nothing to rank for this cycle."
+            : !trimmed ? "No domain with 3+ pages in this cycle matches."
+            : `No match among the site's copy of this cycle (its 3,000 biggest domains). ${RF ? "“Every domain” above searches all of them." : "The full data, with every domain, is on Hugging Face; an “Every domain” button appears here when it's available."}` }));
+          return;
+        }
         const body = html("tbody");
         for (const [i] of rows) {
           body.append(html("tr", {}, html("th", { scope: "row" }, ctx.button({ class: "domain-link", text: T.domain[i] + (hasEx(T, i) ? " ▸" : "") }, (e) => openDomain(ctx, R, cycle, T, i, e.currentTarget))),
@@ -538,11 +556,28 @@ const Raw = (() => {
     }
     const wait = html("p", { class: "empty", text: "Loading…" });
     host.append(wait);
-    loadDomains(run, cycle).then((T) => {
+    const d = domain.toLowerCase();
+    loadDomains(run, cycle).then(async (T) => {
+      let i = T ? T.domain.indexOf(d) : -1;
+      let checkedAll = !R.domain_rows; // the site's table has every domain unless the build was trimmed
+      // The site keeps each cycle's 3,000 biggest domains (in the flat-250 crawls an arbitrary cut among thousands tied
+      // at 250 pages): look in every domain on Hugging Face when it's there.
+      if (i < 0 && R.domain_rows) {
+        await loadFull(run).promise;
+        if (fullOf(run)) {
+          wait.textContent = "Not in the site's copy of this cycle; looking in every domain on Hugging Face…";
+          const all = await loadFullDomains(run, cycle);
+          if (all) {
+            T = all;
+            i = all.domain.indexOf(d);
+            checkedAll = true;
+          }
+        }
+      }
       wait.remove();
-      const i = T ? T.domain.indexOf(domain.toLowerCase()) : -1;
-      if (i < 0) host.append(html("p", { class: "empty", text: `No raw-data row for this domain in cycle ${cycle} (it needs 3 or more pages in the cycle).` }));
-      else fillDomain(host, run, R, cycle, T, i);
+      if (i >= 0) fillDomain(host, run, R, cycle, T, i);
+      else if (checkedAll) host.append(html("p", { class: "empty", text: `No raw-data row for this domain in cycle ${cycle}: it had fewer than 3 pages in the cycle.` }));
+      else host.append(html("p", { class: "empty", text: `Not in the site's copy of cycle ${cycle}, which keeps the cycle's 3,000 biggest domains. The full data, with every domain, is on Hugging Face; this panel looks there when it's available.` }));
     });
   }
 
